@@ -1,1 +1,138 @@
-
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>자동 목록 생성</title>
+    <style>
+        :root { --primary-color: #2563eb; --bg-color: #f8fafc; --border-color: #e2e8f0; }
+        body { font-family: 'Pretendard', -apple-system, sans-serif; background-color: var(--bg-color); padding: 40px 20px; display: flex; justify-content: center; }
+        .container { width: 100%; max-width: 1000px; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
+        h1 { font-size: 1.5rem; color: #1e293b; margin-bottom: 20px; text-align: center; }
+        textarea { width: 100%; height: 150px; padding: 12px; border: 1px solid var(--border-color); border-radius: 8px; resize: vertical; font-size: 14px; box-sizing: border-box; outline-color: var(--primary-color); }
+        .controls { margin: 20px 0; display: flex; gap: 10px; align-items: center; }
+        select { padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border-color); flex: 1; }
+        button { padding: 8px 24px; background-color: var(--primary-color); color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; transition: background 0.2s; }
+        button:hover { background-color: #1d4ed8; }
+        .preview-area { margin-top: 30px; border-top: 2px solid var(--bg-color); padding-top: 20px; }
+        #tableWrapper { width: 100%; display: flex; justify-content: center; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>갤러리 뷰 만들기</h1>
+    <textarea id="urlInput" placeholder="유튜브 주소를 한 줄에 하나씩 입력하세요..."></textarea>
+    <div class="controls">
+        <select id="layoutOption">
+            <option value="3">배열 : 3칸</option>
+            <option value="2">배열 : 2칸 (너비 배율 0.8 적용)</option>
+        </select>
+        <select id="widthOption">
+            <option value="100%">표 너비: 100%</option>
+            <option value="98%">표 너비: 98%</option>
+            <option value="96%">표 너비: 96%</option>
+            <option value="94%">표 너비: 94%</option>
+            <option value="92%">표 너비: 92%</option>
+            <option value="90%">표 너비: 90%</option>
+        </select>
+        <button onclick="updateTable()" style="background-color: #059669;">목록 생성</button>
+        <button onclick="copyHtml()" style="background-color: var(--primary-color);">HTML 코드 복사</button>
+    </div>
+    <div class="preview-area">
+        <h3>미리보기</h3>
+        <div id="tableWrapper">
+            <table id="resultTable" style="width: 100%; margin: 0 auto; border-collapse: collapse; table-layout: fixed; text-align: center;">
+                <tbody id="tableBody"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+<script>
+    const urlInput = document.getElementById('urlInput');
+    const tableBody = document.getElementById('tableBody');
+    const resultTable = document.getElementById('resultTable');
+    const widthOption = document.getElementById('widthOption');
+    const layoutOption = document.getElementById('layoutOption');
+    function getYouTubeId(url) {
+        const regex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/;
+        const match = url.match(regex);
+        return (match && match[1]) ? match[1] : null;
+    }
+    function applyTableWidth() {
+		const baseWidth = parseInt(widthOption.value); 
+		const colCount = parseInt(layoutOption.value);
+		const ratio = (colCount === 2) ? 0.8 : 1.0;
+		const finalWidth = baseWidth * ratio;
+		resultTable.style.width = finalWidth + '%';
+	}
+    widthOption.addEventListener('change', applyTableWidth);
+    layoutOption.addEventListener('change', () => { applyTableWidth(); updateTable(); });
+	
+    async function updateTable() {
+        const lines = urlInput.value.split('\n').filter(line => line.trim() !== '');
+        tableBody.innerHTML = '';
+        const colCount = parseInt(layoutOption.value);
+        const tdWidth = (100 / colCount) + '%';
+        const sidePadding = '3.5%'; //좌우 여백 조절
+        for (let i = 0; i < lines.length; i += colCount) {
+            const chunk = lines.slice(i, i + colCount);
+            const rowGroupIndex = i / colCount;
+            let thumbRow = `<tr>`;
+            for (let j = 0; j < colCount; j++) {
+                const videoId = chunk[j] ? getYouTubeId(chunk[j]) : null;
+                const tdStyle = `width:${tdWidth}; padding:1% ${sidePadding}; border:none; text-align:center; vertical-align:bottom;`;//여기서 padding은 상하조절
+                if (videoId) {
+                    const cleanedUrl = `https://www.youtube.com/watch?v=${videoId}`;
+                    thumbRow += `<td style="${tdStyle}"><a href="${cleanedUrl}" target="_blank" style="text-decoration:none;"><img src="https://img.youtube.com/vi/${videoId}/hq720.jpg" style="width:100%; display:block; margin:0 auto; border-radius:0.7vw;"></a></td>`;
+                } else { thumbRow += `<td style="${tdStyle}"></td>`; }
+            }
+            thumbRow += `</tr>`;
+            let titleRow = `<tr>`;
+            for (let j = 0; j < colCount; j++) {
+                const videoId = chunk[j] ? getYouTubeId(chunk[j]) : null;
+                const uniqueId = `title-${rowGroupIndex}-${j}`;
+                const tdStyle = `width:${tdWidth}; padding:0 ${sidePadding} 1.5% ${sidePadding}; border:none; text-align:center; vertical-align:top;`;//여기서 padding은 상하조절
+                if (videoId) {
+                    const cleanedUrl = `https://www.youtube.com/watch?v=${videoId}`;
+                    titleRow += `<td style="${tdStyle}"><input type="text" class="title-input" id="${uniqueId}" data-url="${cleanedUrl}" value="불러오는 중..." style="width:100%; box-sizing:border-box; text-align:center; border:none; background:transparent; outline:none; font-size:0.9rem;"></td>`;
+                    fetchTitle(cleanedUrl, uniqueId);
+                } else { titleRow += `<td style="${tdStyle}"></td>`; }
+            }
+            titleRow += `</tr>`;
+            tableBody.insertAdjacentHTML('beforeend', thumbRow + titleRow);
+        }
+        applyTableWidth();
+    }
+    async function fetchTitle(url, elementId) {
+        try {
+            const noEmbedUrl = `https://noembed.com/embed?url=${encodeURIComponent(url)}`;
+            const res = await fetch(noEmbedUrl);
+            const data = await res.json();
+            const input = document.getElementById(elementId);
+            if (input && data.title) { input.value = data.title; }
+        } catch (e) {
+            const input = document.getElementById(elementId);
+            if (input) input.value = "제목 수동 입력";
+        }
+    }
+    function copyHtml() {
+        const originTable = document.getElementById('resultTable');
+        const cloneTable = originTable.cloneNode(true);
+        const inputs = cloneTable.querySelectorAll('.title-input');
+        inputs.forEach((input, index) => {
+            const actualTitle = document.querySelectorAll('.title-input')[index].value;
+            const videoUrl = input.getAttribute('data-url');
+            const parentTd = input.parentElement;
+            parentTd.innerHTML = `<a href="${videoUrl}" target="_blank" style="display: block; text-decoration: none; color: inherit; font-size: 0.8rem; line-height: 1.3;">${actualTitle}</a>`;//글씨체, 폰트크기, 행간 조절은 여기서
+        });
+        const tempElem = document.createElement('textarea');
+        tempElem.value = cloneTable.outerHTML.trim();
+        document.body.appendChild(tempElem);
+        tempElem.select();
+        document.execCommand('copy');
+        document.body.removeChild(tempElem);
+        alert('HTML 코드가 복사되었습니다!');
+    }
+</script>
+</body>
+</html>
