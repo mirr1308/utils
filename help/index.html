@@ -5,6 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>도움말</title>
     <style>
+		html {
+		    scroll-behavior: smooth;
+		}
         body {
             margin: 0;
             padding: 0;
@@ -239,6 +242,9 @@
             max-height: 220px;
             width: auto;
         }
+		.card h3 a:hover {
+		    color: #007aff !important;
+		}
 		
         @media (max-width: 768px) {
             .container { 
@@ -287,7 +293,7 @@
 
     <div class="container">
         <aside class="sidebar">
-            <nav class="toc">
+            <nav class="toc" id="toc">
                 <h4>목차</h4>
                 <ul>
                     <li><a href="#section1">1. 개요</a></li>
@@ -304,7 +310,7 @@
 
         <main class="main-content">
             <section id="section1" class="card">
-                <h3>1. 개요</h3>
+                <h3><a href="#toc" style="text-decoration: none; color: inherit; cursor: pointer;">1. 개요</a></h3>
                 <div class="description">
                     이 웹에디터는 스케줄표를 쉽게 작성하기 위해 만들어진 자동 확장/커스텀 보조 도구입니다.
                 </div>
@@ -330,7 +336,7 @@
             </section>
 
             <section id="section2" class="card">
-                <h3>2. 데이터 분석/적용</h3>
+                <h3><a href="#toc" style="text-decoration: none; color: inherit; cursor: pointer;">2. 데이터 분석/적용</a></h3>
                 <div class="image-box"><img src="images/3.png"></div>
                 <div class="description">
                     분석할 Table 양식을 붙여넣어 주세요. 자동 정제 기능이 있어 1일부터 31일까지 작성한 스케줄표를 넣어도 샘플 코드를 추출합니다. <br>
@@ -471,7 +477,7 @@
             </section>
 
             <section id="section3" class="card">
-                <h3>3. 줄 확장</h3>
+                <h3><a href="#toc" style="text-decoration: none; color: inherit; cursor: pointer;">3. 줄 확장</a></h3>
 				<div class="description">
                     분석된 샘플코드를 자동으로 불러와 1일부터 31일까지 만들어주는 기능입니다. 매월 바뀌는 스케줄표 디자인 바꾸기, 쉽게 버튼 하나로 해결하세요.<br><br>
                 </div>
@@ -501,7 +507,7 @@
             </section>
 			
 			<section id="section4" class="card">
-                <h3>4. 칸 분할</h3>
+                <h3><a href="#toc" style="text-decoration: none; color: inherit; cursor: pointer;">4. 칸 분할</a></h3>
                 <div class="image-box"><img src="images/10.png"></div>
                 <div class="description">
                     칸을 쉽게 나눌 수 있습니다.<br>
@@ -512,7 +518,7 @@
             </section>
 			
 			<section id="section5" class="card">
-                <h3>5. 커스텀 툴바 설정</h3>
+                <h3><a href="#toc" style="text-decoration: none; color: inherit; cursor: pointer;">5. 커스텀 툴바 설정</a></h3>
 				<div class="description">
                     복붙하지 마시고 자주 쓰는 스타일은 저장해서 편하게 꺼내 쓰세요 <br>
                 </div>
@@ -553,7 +559,7 @@ style : orange; border : solid 5px orange;
             </section>
 			
 			<section id="section6" class="card">
-                <h3>6. 캘린더 생성/변환</h3>
+                <h3><a href="#toc" style="text-decoration: none; color: inherit; cursor: pointer;">6. 캘린더 생성/변환</a></h3>
 				<div class="description">
                     스케줄표에 달력을 넣으시는 분들에게<br>
 					만들지 마세요. 변환하세요.<br>
@@ -575,14 +581,14 @@ style : orange; border : solid 5px orange;
             </section>
 			
 			<section id="section7" class="card">
-                <h3>7. 링크 삽입/변경</h3>
+                <h3><a href="#toc" style="text-decoration: none; color: inherit; cursor: pointer;">7. 링크 삽입/변경</a></h3>
                 <div class="description">
                     일반적인 링크 기능과 동일합니다. td의 id 칸 수정 기능은 필요할 경우 사용하시면 됩니다. 밑줄 제거는 하이퍼링크에 표시되는 밑줄 스타일이 보이지 않도록 처리한 것입니다. 필요하시면 해제해서 사용하세요.
                 </div>
             </section>
 			
 			<section id="section8" class="card">
-                <h3>8. 불러오기/내보내기/코드복사</h3>
+                <h3><a href="#toc" style="text-decoration: none; color: inherit; cursor: pointer;">8. 불러오기/내보내기/코드복사</a></h3>
                 <div class="description">
                     불러오기 - JSON 파일로 저장된 샘플 코드와 커스텀 툴바 설정을 불러와 덮어씁니다.<br>
 					내보내기 - 현재 임시 저장된 샘플 코드와 커스텀 툴바 설정을 JSON 파일로 내보냅니다.<br>
