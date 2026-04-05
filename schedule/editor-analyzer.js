@@ -287,8 +287,27 @@ window.syncTableToEditor = function (tableElement, lockHeaderLines = false) {
     }
 };
 
+window.isCalendarTable = function() {
+    if (!editor) return false;
+    const html = editor.getValue();
+    const doc = DomManager.parse(html);
+    if (!doc) return false;
+    const table = doc.querySelector('table');
+    if (!table) return false;
+    const firstRow = table.querySelector('tr');
+    if (!firstRow) return false;
+    const totalCols = Array.from(firstRow.cells).reduce(
+        (s, td) => s + (parseInt(td.getAttribute('colspan')) || 1), 0
+    );
+    return totalCols === 7;
+};
+
 window.applyHeaderLock = function() {
     if (!editor) return;
+    if (window.isCalendarTable()) {
+        window.releaseHeaderLock();
+        return;
+    }
     window.clearHeaderLock();
 
     const lines = editor.getValue().split('\n');
