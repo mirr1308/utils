@@ -534,7 +534,6 @@ window.onload = function () {
         btn.addEventListener('mousedown', (e) => e.preventDefault());
     });
 
-    // ── 툴바 버튼 캐시 ──────────────────────────────────────────────
     window._toolbarBtnCache = {
         bold:      document.querySelector(".icon-btn[onclick*=\"execStyle('bold')\"]"),
         italic:    document.querySelector(".icon-btn[onclick*=\"execStyle('italic')\"]"),
@@ -751,7 +750,8 @@ function copyCode() {
     if (!code) { window.showToast('복사할 코드가 없습니다.'); return; }
 
     let textToCopy = code;
-    if (window._headerLockRange) {
+    const useHeaderLock = window._headerLockRange && !window.isCalendarTable?.();
+    if (useHeaderLock) {
         const { trStart, trEnd } = window._headerLockRange;
         const allLines = code.split('\n');
         const trLines = allLines.slice(trStart, trEnd + 1);
@@ -764,7 +764,7 @@ function copyCode() {
 
     navigator.clipboard.writeText(textToCopy)
         .then(() => window.showToast(
-            window._headerLockRange ? '<tr> 행 코드가 복사되었습니다!' : 'HTML 코드가 복사되었습니다!'
+            useHeaderLock ? '<tr> 행 코드가 복사되었습니다!' : 'HTML 코드가 복사되었습니다!'
         ))
         .catch(() => window.showToast('복사 중 오류가 발생했습니다.'));
 }
