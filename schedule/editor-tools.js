@@ -466,10 +466,24 @@ window.applyLinkChanges = function () {
     const newText   = textInput.value;
     const isImg     = textInput.getAttribute('data-is-img') === 'true';
     const href      = document.getElementById('modalLinkHref').value.trim();
+    const tdIdRaw   = document.getElementById('modalTdId').value.trim();
+    const tdId      = tdIdRaw ? 'user_content_' + tdIdRaw : '';
     if (!window.savedModalRange) return;
 
     const sel = window.getSelection();
     const range = window.savedModalRange;
+
+    if (tdId) {
+        const startNode = range.startContainer;
+        const parentTd  = (startNode.nodeType === 3 ? startNode.parentElement : startNode).closest('td');
+        if (parentTd) parentTd.id = tdId;
+    }
+
+    if (!href) {
+        ModalManager.close('linkModal');
+        if (typeof window.syncPreviewToEditor === 'function') window.syncPreviewToEditor();
+        return;
+    }
 
     const clone = range.cloneContents();
     const tempDiv = document.createElement('div');
@@ -494,35 +508,24 @@ window.applyLinkChanges = function () {
         });
     }
 
-    let nodeToFollow; 
-    if (href) {
-        const a = document.createElement('a');
-        a.href = href;
-        a.target = document.getElementById('modalTargetBlank').checked ? '_blank' : '_self';
-        if (document.getElementById('modalUnderline').checked) a.style.textDecoration = 'none';
+    const a = document.createElement('a');
+    a.href = href;
+    a.target = document.getElementById('modalTargetBlank').checked ? '_blank' : '_self';
+    if (document.getElementById('modalUnderline').checked) a.style.textDecoration = 'none';
 
-        if (isImg) {
-            a.innerHTML = originalHTML; 
-        } else {
-            a.textContent = newText;
-        }
-        
-        range.insertNode(a);
-        nodeToFollow = a;
-
-        if (a.nextSibling && a.nextSibling.tagName === 'SPAN' && !a.nextSibling.textContent.trim()) {
-            a.nextSibling.remove();
-        }
+    if (isImg) {
+        a.innerHTML = originalHTML; 
     } else {
-        const temp = document.createElement('div');
-        temp.innerHTML = originalHTML;
-        const frag = document.createDocumentFragment();
-        while(temp.firstChild) frag.appendChild(temp.firstChild);
-        nodeToFollow = frag.lastChild;
-        range.insertNode(frag);
+        a.textContent = newText;
+    }
+    
+    range.insertNode(a);
+
+    if (a.nextSibling && a.nextSibling.tagName === 'SPAN' && !a.nextSibling.textContent.trim()) {
+        a.nextSibling.remove();
     }
 
-    range.setStartAfter(nodeToFollow);
+    range.setStartAfter(a);
     range.collapse(true);
     sel.removeAllRanges();
     sel.addRange(range);
