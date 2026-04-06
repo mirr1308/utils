@@ -354,7 +354,7 @@
 				
                 <div class="description">
                     <div class="callout tip">
-						<strong>예시</strong> <br><br>
+						<strong>예시</strong> (해당 샘플코드는 AI가 스타일을 바꾸면서 테두리 몇개를 날려먹었는데 다크모드로 확인하는걸 깜빡함... 샘플코드 다크모드 확인 필수) <br><br>
 						<center>
 			<table cellpadding="0" cellspacing="0" style="
 				table-layout: fixed;
@@ -367,8 +367,7 @@
 				box-shadow: 0 12px 35px rgba(0,0,0,0.1);
 				overflow: hidden;
 				font-family: 'Pretendard', 'Apple SD Gothic Neo', sans-serif;
-				background-color: #fff;
-			">
+				background-color: #fff;">
 				<thead>
 					<tr style="height: 50px; background-color: #AEECE0; color: #fff; font-weight: 800; font-size: 13px; letter-spacing: 1px;">
 						<th style="width: 10%; text-align: center;">DATE</th>
@@ -490,6 +489,8 @@
 					날짜 ID 자동 생성은 캘린더 연동을 처음 하시는 분들께 권장합니다. day를 입력하면 자동으로 day1, day2, …, day31까지 생성되며, 입력하지 않아도 1, 2, …, 31 형식으로 생성됩니다.<br>
 					이미 td id가 있는 경우, 샘플 코드를 분석하여 자동으로 id가 할당됩니다.<br><br>
 					날짜 칸 색상에서는 #6자리, #3자리, red, gray, blue 등을 입력하면 자동으로 적용됩니다. 여러 색을 입력할 경우 반드시 쉼표로 구분해 주세요.<br>
+					<br>
+					입력 x → 샘플코드의 1일에 해당하는 텍스트 color 그대로 생성 (민트색이면 전부 민트색으로)<br>
 					gray 입력 → 1, 2, … 해당 숫자열 전체가 gray 색상으로 변경됨<br>
 					#333, red → 선택한 달 기준, 일요일에 해당하는 날짜만 red이고 나머지는 #333 색상으로 변경됨<br>
 					#333, blue, red → 선택한 달 기준, 토요일은 파란색, 일요일은 빨간색, 나머지는 #333으로 변경됨<br><br>
@@ -591,9 +592,9 @@ style : orange; border : solid 5px orange;
 			<section id="section8" class="card">
                 <h3><a href="#toc" style="text-decoration: none; color: inherit; cursor: pointer;">8. 불러오기/내보내기/코드복사</a></h3>
                 <div class="description">
-                    불러오기 - JSON 파일로 저장된 샘플 코드와 커스텀 툴바 설정을 불러와 덮어씁니다.<br>
-					내보내기 - 현재 임시 저장된 샘플 코드와 커스텀 툴바 설정을 JSON 파일로 내보냅니다.<br>
-					코드 복사 - HTML 코드를 복사합니다. 줄 확장 기능을 이용해 특정 구간만 편집할 경우, tr 행만 따로 복사할 수 있습니다.<br><br>
+                    불러오기 → JSON 파일로 저장된 샘플 코드와 커스텀 툴바 설정을 불러와 덮어씁니다.<br>
+					내보내기 → 현재 임시 저장된 샘플 코드와 커스텀 툴바 설정을 JSON 파일로 내보냅니다.<br>
+					코드 복사 → HTML 코드를 복사합니다. 줄 확장 기능을 이용해 특정 구간만 편집할 경우, tr 행만 따로 복사할 수 있습니다.<br><br>
 					샘플 코드와 커스텀 툴바 설정은 캐시와 로컬 스토리지 두 곳에 저장되지만, 만일의 상황에 대비해 백업을 권장합니다.
                 </div>
             </section>
