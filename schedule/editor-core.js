@@ -384,26 +384,19 @@ window.onload = function () {
     });
 
     let previewZoom = 1;
-    preview.style.transformOrigin = '0 0';
     preview.addEventListener('wheel', (e) => {
         if (!e.ctrlKey) return;
         e.preventDefault();
-
-        const container = document.getElementById('previewScrollWrap') || preview.parentElement;
         const rect = preview.getBoundingClientRect();
+        const xPercent = ((e.clientX - rect.left) / rect.width) * 100;
+        const yPercent = ((e.clientY - rect.top) / rect.height) * 100;
 
-        const mouseX = (e.clientX - rect.left) / previewZoom;
-        const mouseY = (e.clientY - rect.top) / previewZoom;
-
-        const prevZoom = previewZoom;
         const delta = e.deltaY > 0 ? -0.1 : 0.1;
         previewZoom = Math.min(Math.max(0.3, previewZoom + delta), 3);
-
+        
+        preview.style.transformOrigin = `${xPercent}% ${yPercent}%`;
         preview.style.transform = `scale(${previewZoom})`;
         preview.style.width = (100 / previewZoom) + '%';
-
-        container.scrollLeft += mouseX * (previewZoom - prevZoom);
-        container.scrollTop  += mouseY * (previewZoom - prevZoom);
     }, { passive: false });
 
     preview.addEventListener('input', () => {
@@ -845,7 +838,6 @@ window.insertFormattedHtml = function (rawHtml) {
     editor.replaceSelection(html_beautify(rawHtml, BEAUTIFY_OPTIONS) + '\n');
     editor.focus();
 };
-
 document.addEventListener('DOMContentLoaded', () => {
     const themeBtn = document.getElementById('themeToggleBtn');
     const previewArea = document.getElementById('previewArea');
