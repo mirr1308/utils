@@ -473,6 +473,7 @@
 				<br>
                     샘플코드는 칸 안에 들어갈 내용을 제외하고 모든 디자인을 그대로 남깁니다. &lt;table&gt;&lt;/table&gt; 밖의 요소들은 지워지며(div 등등), 안의 요소도 지워집니다.<br>
 					스케줄표는 반드시 1일부터 시작해야합니다. '1 수' 'Mon 1' 다 되나, 1 제외 다른 숫자는 허용하지 않습니다.<br></div>
+				<p class="highlight" style="font-size:12px;">샘플코드 1일자의 td style=""에 width, padding, text-align, color, font-size 등 미리 넣어두면 그대로 상속됩니다. time, category는 중앙정렬이지만 contents는 왼쪽 정렬에 왼쪽 테두리에서 여백을 두는 경우가 많죠? 앞으론 td style에 넣고 쉽게 만드세요</p><br>
             </section>
 
             <section id="section3" class="card">
@@ -548,7 +549,7 @@
 글자블록 플러스
 &lt;p style = "font-size : 13px;"&gt;&lt;span style="text-align:center;border:solid 1px gray; border-radius:5px;font-size:9px;padding:2px 5px;"&gt;글자&lt;/span&gt;&nbsp;&nbsp;&nbsp;내용 더 플러스&lt;/p&gt;
 
-테두리 설정값 - 메모지용으로 써도 됨. 매번 찾으려고 스크롤 왔다갔다 귀찮잖아요
+테두리 설정값 - 커스텀툴바에 메모지용으로 써도 됨. 스타일 매번 찾으려고 스크롤 왔다갔다 귀찮잖아요
 style : orange; border : solid 5px orange;
 
 -- 멤버별 카테고리 양식 --
@@ -578,14 +579,14 @@ style : orange; border : solid 5px orange;
 				<p class="caption">26년 12월 달력이 됩니다</p><br>
 				<div class="description">
                     고급형은 안의 내용 빼고 그대로 달력을 옮깁니다. 반드시 기준 년월을 제대로 입력하세요. 26년 4월 1일 기준 수요일이라 수요일부터 시작하는 달력을 넣어야하는데, 기준년월이 26년 4월이 아니면 제대로 변환이 되지 않습니다. (26년 4월 달력이라고 해놓고 1일이 일요일이고 이러지 말 것.)<br><br>
-					<p class="highlight" style="font-size:12px;">td안의 내용을 지우고 옮기는 구조기 때문에 p태그,span태그의 style은 적용되지 않습니다. 앞으로도 쭉 캘린더 변환 기능을 이용하실거면 폰트크기, 폰트색같은건 td style에 넣어보도록해요...</p><br>
+					<p class="highlight" style="font-size:12px;">td안의 내용을 지우고 옮기는 구조이기 때문에 p태그,span태그의 style은 적용되지 않습니다. 앞으로도 쭉 캘린더 변환 기능을 이용하실거면 폰트크기, 폰트색같은건 td style에 넣어보도록해요...</p><br>
 				</div>
             </section>
 			
 			<section id="section7" class="card">
                 <h3><a href="#toc" style="text-decoration: none; color: inherit; cursor: pointer;">7. 링크 삽입/변경</a></h3>
                 <div class="description">
-                    일반적인 링크 기능과 동일합니다. td의 id 칸 수정 기능은 필요할 경우 사용하시면 됩니다. 밑줄 제거는 하이퍼링크에 표시되는 밑줄 스타일이 보이지 않도록 처리한 것입니다. 필요하시면 해제해서 사용하세요.
+                    일반적인 링크 기능과 동일합니다. td의 id 칸 수정 기능은 필요할 경우 사용하시면 됩니다. 밑줄 제거는 하이퍼링크에 표시되는 밑줄 스타일이 보이지 않도록 기본값으로 처리한 것입니다. 필요하시면 체크 해제해서 사용하세요.
                 </div>
             </section>
 			
