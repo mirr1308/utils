@@ -1,257 +1,420 @@
 /**
- * editor-analyzer.js
+ * editor-analyzer.js  
  */
 
 const SampleCache = {
-    _dom: null,
-    _html: null,
-	
-	_loadFromStorage() {
-        if (!this._html) {
-            const saved = AppStore.get('analysis_source_save');
-            if (saved) {
-                this._html = saved;
-                this._dom = DomManager.parse(saved);
+    _domDocument:  null,
+    _htmlString: null,
+
+    _loadFromStorage() {
+        if (!this._htmlString) {
+            const savedHtml = AppStore.get('analysis_source_save');
+            if (savedHtml) {
+                this._htmlString = savedHtml;
+                this._domDocument  = DomManager.parse(savedHtml);
                 return true;
             }
         }
-        return !!this._html;
+        return !!this._htmlString;
     },
     set(html) {
-        const cleanHtml = html?.trim() || "";
-
-        if (!cleanHtml) {
-            this._html = null;
-            this._dom = null;
-            AppStore.remove('analysis_source_save'); 
+        const trimmedHtml = html?.trim() || '';
+        if (!trimmedHtml) {
+            this._htmlString = null;
+            this._domDocument  = null;
+            AppStore.remove('analysis_source_save');
             return;
         }
-        if (cleanHtml === this._html) return;
-
-        this._html = cleanHtml;
-        this._dom = DomManager.parse(cleanHtml);
-        AppStore.set('analysis_source_save', cleanHtml);
+        if (trimmedHtml === this._htmlString) return;
+        this._htmlString = trimmedHtml;
+        this._domDocument  = DomManager.parse(trimmedHtml);
+        AppStore.set('analysis_source_save', trimmedHtml);
     },
-
     getHtml() {
-        this._loadFromStorage(); 
-        return this._html || '';
+        this._loadFromStorage();
+        return this._htmlString || '';
     },
-
     refreshUI() {
-        const html = this.getHtml();
-        const input = document.getElementById('analysisInput');
-        
-        if (input) input.value = html;
+        const html  = this.getHtml();
+        const inputElement = document.getElementById('analysisInput');
+        if (inputElement) inputElement.value = html;
         if (window.analysisEditor) window.analysisEditor.setValue(html);
     },
-
     getTemplateTable() {
-        const input = document.getElementById('analysisInput');
-        if (input) {
-            const inputValue = input.value.trim();
-            if (inputValue && inputValue !== (this._html || "")) {
-                this.set(inputValue);
-            }
+        const inputElement = document.getElementById('analysisInput');
+        if (inputElement) {
+            const inputValue = inputElement.value.trim();
+            if (inputValue && inputValue !== (this._htmlString || '')) this.set(inputValue);
         }
-
-        if (!this._dom) {
-            this._loadFromStorage();
-        }
-
-        if (!this._dom) return null;
-        const tbl = this._dom.querySelector('table');
-        return tbl ? DomManager.clone(tbl) : null;
+        if (!this._domDocument) this._loadFromStorage();
+        if (!this._domDocument) return null;
+        const tableElement = this._domDocument.querySelector('table');
+        return tableElement ? DomManager.clone(tableElement) : null;
     },
-
     init() {
-        this._loadFromStorage(); 
+        this._loadFromStorage();
         this.refreshUI();
     }
 };
 window.SampleCache = SampleCache;
 
+const SANITIZE_CONFIG = {
+    pairedTags:    ['script', 'iframe', 'object', 'svg'],   
+    selfClosingTags: ['embed', 'link', 'meta', 'base'],  
+};
+
+const CSS_PROPS = {
+    RADIUS: [
+        'border-radius',
+        'border-top-left-radius',    'border-top-right-radius',
+        'border-bottom-left-radius', 'border-bottom-right-radius',
+    ],
+    TOP_RADIUS: [
+        'border-top-left-radius', 'border-top-right-radius',
+    ],
+    BOTTOM_RADIUS: [
+        'border-bottom-left-radius', 'border-bottom-right-radius',
+    ],
+};
+
 const StyleUtils = {
+    hexStyle(styleString) {
+        return ColorManager.restoreColors(styleString);
+    },
+    toHex(color) {
+		if (!color) return '';
+		return ColorManager.toOriginalForm(color); 
+	},
 
-    hexStyle(styleStr) {
-        return ColorManager.hexifyStyle(styleStr);
+    getCleanStyle(element) {
+        if (!element) return '';
+        return (element.getAttribute('style') || '').replace(/cursor:[^;]+;?/g, '').trim();
     },
 
-    normValue(v, prop) {
-        v = (v || '').trim();
-        if (!v) return v;
-        if (prop && (prop.includes('color') || prop.includes('background'))) {
-            return ColorManager.toHex(v);
+    replaceStyleProp(styleString, property, newValue) {
+        styleString = (styleString || '').trim();
+        const propRegex = new RegExp(`(^|;)\\s*${property}\\s*:[^;]+;?`, 'gi');
+        if (!newValue) {
+            return styleString.replace(propRegex, '$1').replace(/;+/g, ';').replace(/^;|;$/g, '');
         }
-        return v.toLowerCase();
-    },
-
-    parseStyleObj(styleStr) {
-        const el = document.createElement('div');
-        el.setAttribute('style', styleStr || '');
-        return el.style;   // CSSStyleDeclaration (live)
-    },
-
-    parseStyleForCompare(styleStr) {
-        const map = {};
-        const style = this.parseStyleObj(styleStr);
-        for (let i = 0; i < style.length; i++) {
-            const prop = style[i];
-            const val = this.normValue(style.getPropertyValue(prop), prop);
-            if (val) map[prop] = val;
+        if (propRegex.test(styleString)) {
+            return styleString.replace(propRegex, `$1${property}:${newValue};`).replace(/;+/g, ';').replace(/^;|;$/g, '');
         }
-        return map;
+        return (styleString.replace(/;?$/, '') + `;${property}:${newValue};`).replace(/^;+/, '');
     },
-	getCleanStyle: function(el) {
-        if (!el) return '';
-        let style = el.getAttribute('style') || '';
-        return style.replace(/cursor:[^;]+;?/g, '').trim(); 
+    _removeStyles(styleString, propsArray) {
+        if (!styleString) return '';
+        const obj = ColorManager.parseStyleString(styleString);
+        propsArray.forEach(prop => delete obj[prop]);
+        return ColorManager.serializeStyle(obj);
     },
-    parseBorderRadius(el) {
-        if (!el) return { tl: '', tr: '', br: '', bl: '' };
-        const s = el.style;
-        return {
-            tl: s.borderTopLeftRadius     || s.borderRadius || '',
-            tr: s.borderTopRightRadius    || s.borderRadius || '',
-            br: s.borderBottomRightRadius || s.borderRadius || '',
-            bl: s.borderBottomLeftRadius  || s.borderRadius || '',
-        };
-    },
+    removeRadius(styleString)       { return this._removeStyles(styleString, CSS_PROPS.RADIUS); },
+    removeTopRadius(styleString)    { return this._removeStyles(styleString, CSS_PROPS.TOP_RADIUS); },
+    removeBottomRadius(styleString) { return this._removeStyles(styleString, CSS_PROPS.BOTTOM_RADIUS); },
 
-    parseBorderSides(el) {
-        if (!el) return { top: '', right: '', bottom: '', left: '' };
-        const s = el.style;
-        const get = (w, st, c) => [w, st, c].filter(Boolean).join(' ') || s.border || '';
-        return {
-            top:    s.borderTop    || get(s.borderTopWidth,    s.borderTopStyle,    s.borderTopColor),
-            right:  s.borderRight  || get(s.borderRightWidth,  s.borderRightStyle,  s.borderRightColor),
-            bottom: s.borderBottom || get(s.borderBottomWidth, s.borderBottomStyle, s.borderBottomColor),
-            left:   s.borderLeft   || get(s.borderLeftWidth,   s.borderLeftStyle,   s.borderLeftColor),
-        };
+    applyBg(styleString, backgroundColor) {
+        const obj = ColorManager.parseStyleString(styleString);
+        if (!backgroundColor) {
+            delete obj['background'];
+            delete obj['background-color'];
+        } else {
+            obj['background-color'] = backgroundColor;
+        }
+        return ColorManager.serializeStyle(obj);
     },
 
-    applyCellStyle(newCell, firstRowCell, lastRowCell) {
-        const fb = this.parseBorderSides(firstRowCell);
-        const lb = this.parseBorderSides(lastRowCell);
-        newCell.style.border = '';
-        if (fb.top)    newCell.style.borderTop    = fb.top;
-        if (fb.left)   newCell.style.borderLeft   = fb.left;
-        if (fb.right)  newCell.style.borderRight  = fb.right;
-        if (lb.bottom) newCell.style.borderBottom = lb.bottom;
-
-        const fr = this.parseBorderRadius(firstRowCell);
-        const lr = this.parseBorderRadius(lastRowCell);
-        newCell.style.borderRadius = '';
-        if (fr.tl) newCell.style.borderTopLeftRadius     = fr.tl;
-        if (fr.tr) newCell.style.borderTopRightRadius    = fr.tr;
-        if (lr.br) newCell.style.borderBottomRightRadius = lr.br;
-        if (lr.bl) newCell.style.borderBottomLeftRadius  = lr.bl;
-
-        const shadow  = firstRowCell?.style.boxShadow || lastRowCell?.style.boxShadow || '';
-        const outline = firstRowCell?.style.outline   || '';
-        if (shadow)  newCell.style.boxShadow = shadow;
-        if (outline) newCell.style.outline   = outline;
+    extractBgColor(element) {
+        if (!element) return '';
+        const styleString = element.getAttribute('style') || '';
+        const bgMatch = styleString.match(/background(?:-color)?\s*:\s*([^;]+)/i);
+        return bgMatch ? ColorManager.toOriginalForm(bgMatch[1].trim()) : '';
     },
-
-    cloneStructuralTd(srcTd, borderBottomOverride = null) {
-        const td = srcTd.cloneNode(false);
-        if (srcTd.colSpan > 1)          td.colSpan = srcTd.colSpan;
-        ['align', 'width', 'valign'].forEach(attr => {
-            if (srcTd.hasAttribute(attr)) td.setAttribute(attr, srcTd.getAttribute(attr));
+    parseColorInput(rawColorString) {
+        return (rawColorString || '').split(',').map(p => p.trim()).filter(Boolean);
+    },
+    getColorForDay(colorArray, dayOfWeek) {
+        const dayGroup = DayManager.getGroupType(dayOfWeek);
+        if (dayGroup === DayManager.DAY_IDX.SUN) return colorArray[2];
+        if (dayGroup === DayManager.DAY_IDX.SAT) return colorArray[1];
+        return colorArray[0] || null;
+    },
+    wrapTextNodesWithColor(parentNode, hexColor) {
+        const walker = document.createTreeWalker(parentNode, NodeFilter.SHOW_TEXT, {
+            acceptNode: (node) => node.nodeValue.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP,
         });
-        this.applyCellStyle(td, srcTd, srcTd);
-        if (borderBottomOverride !== null) td.style.borderBottom = borderBottomOverride;
-        return td;
+        const textNodes = [];
+        let node;
+        while ((node = walker.nextNode())) textNodes.push(node);
+        textNodes.forEach(textNode => {
+            const span = document.createElement('span');
+            span.setAttribute('style', `color:${hexColor}`);
+            textNode.parentNode.insertBefore(span, textNode);
+            span.appendChild(textNode);
+        });
+    },
+
+    applyColorToDateCell(cell, hexColor) {
+        if (!hexColor) return;
+        const cellStyle       = cell.getAttribute('style') || '';
+        const hasColorInStyle = /(?:^|;)\s*color\s*:/i.test(cellStyle);
+        if (hasColorInStyle) {
+            cell.setAttribute('style', cellStyle.replace(/((?:^|;)\s*color\s*:)[^;]*/i, `$1${hexColor}`).trim());
+            return;
+        }
+        const coloredChildren = cell.querySelectorAll('p[style*="color"], span[style*="color"]');
+        if (coloredChildren.length > 0) {
+            coloredChildren.forEach(el => {
+                el.setAttribute('style', this.replaceStyleProp(el.getAttribute('style') || '', 'color', hexColor));
+            });
+            return;
+        }
+        this.wrapTextNodesWithColor(cell, hexColor);
+    },
+
+    applyBottomBorder(styleString, borderRule) {
+        if (!borderRule) return styleString;
+        const borderValue = borderRule.includes(':') ? borderRule.split(':')[1].trim() : borderRule;
+        return this.replaceStyleProp(styleString, 'border-bottom', borderValue);
+    },
+
+    extractBottomBorder(tableRowElements) {
+        if (!tableRowElements?.length) return '';
+        const joined       = tableRowElements.map(row => row.getAttribute('style') || '').join(';');
+        const solidMatch   = joined.match(/border-bottom\s*:\s*[^;]*solid[^;]*/i);
+        const lastRowMatch = tableRowElements.at(-1).getAttribute('style')?.match(/border-bottom\s*:[^;]+/i);
+        return solidMatch?.[0] || lastRowMatch?.[0] || '';
+    },
+
+    parseBorderSides(element) {
+        if (!element) return { top: '', right: '', bottom: '', left: '' };
+        const s = element.style;
+        const build = (w, st, c) => [w, st, c].filter(Boolean).join(' ') || s.border || '';
+        return {
+            top:    s.borderTop    || build(s.borderTopWidth,    s.borderTopStyle,    s.borderTopColor),
+            right:  s.borderRight  || build(s.borderRightWidth,  s.borderRightStyle,  s.borderRightColor),
+            bottom: s.borderBottom || build(s.borderBottomWidth, s.borderBottomStyle, s.borderBottomColor),
+            left:   s.borderLeft   || build(s.borderLeftWidth,   s.borderLeftStyle,   s.borderLeftColor),
+        };
+    },
+    parseBorderRadius(element) {
+        if (!element) return { topLeft: '', topRight: '', bottomRight: '', bottomLeft: '' };
+        const s = element.style;
+        return {
+            topLeft:     s.borderTopLeftRadius     || s.borderRadius || '',
+            topRight:    s.borderTopRightRadius    || s.borderRadius || '',
+            bottomRight: s.borderBottomRightRadius || s.borderRadius || '',
+            bottomLeft:  s.borderBottomLeftRadius  || s.borderRadius || '',
+        };
+    },
+
+    applyCellStyle(targetCell, firstRowCell, lastRowCell) {
+        const firstBorder = this.parseBorderSides(firstRowCell);
+        const lastBorder  = this.parseBorderSides(lastRowCell);
+        targetCell.style.border = '';
+        if (firstBorder.top)   targetCell.style.borderTop   = firstBorder.top;
+        if (firstBorder.left)  targetCell.style.borderLeft  = firstBorder.left;
+        if (firstBorder.right) targetCell.style.borderRight = firstBorder.right;
+        if (lastBorder.bottom) targetCell.style.borderBottom = lastBorder.bottom;
+
+        const firstRadius = this.parseBorderRadius(firstRowCell);
+        const lastRadius  = this.parseBorderRadius(lastRowCell);
+        targetCell.style.borderRadius = '';
+        if (firstRadius.topLeft)     targetCell.style.borderTopLeftRadius     = firstRadius.topLeft;
+        if (firstRadius.topRight)    targetCell.style.borderTopRightRadius    = firstRadius.topRight;
+        if (lastRadius.bottomRight)  targetCell.style.borderBottomRightRadius = lastRadius.bottomRight;
+        if (lastRadius.bottomLeft)   targetCell.style.borderBottomLeftRadius  = lastRadius.bottomLeft;
+
+        const boxShadow = firstRowCell?.style.boxShadow || lastRowCell?.style.boxShadow || '';
+        const outline   = firstRowCell?.style.outline   || '';
+        if (boxShadow) targetCell.style.boxShadow = boxShadow;
+        if (outline)   targetCell.style.outline   = outline;
+    },
+
+    cloneStructuralTd(sourceCell, borderBottomOverride = null) {
+        const cloned = sourceCell.cloneNode(false);
+        if (sourceCell.colSpan > 1) cloned.colSpan = sourceCell.colSpan;
+        ['align', 'width', 'valign'].forEach(attr => {
+            if (sourceCell.hasAttribute(attr)) cloned.setAttribute(attr, sourceCell.getAttribute(attr));
+        });
+        this.applyCellStyle(cloned, sourceCell, sourceCell);
+        if (borderBottomOverride !== null) cloned.style.borderBottom = borderBottomOverride;
+        return cloned;
+    },
+
+    applyRowCellStyles(targetRow, sourceRow, hexBackground, { radiusMode = 'none', skipFirstCell = false } = {}) {
+        Array.from(targetRow.cells).forEach((cell, i) => {
+            if (skipFirstCell && i === 0) return;
+            const sourceCell = sourceRow.cells[i];
+            if (!sourceCell) return;
+            let styleString = this.hexStyle(sourceCell.getAttribute('style') || '');
+            if      (radiusMode === 'all')    styleString = this.removeRadius(styleString);
+            else if (radiusMode === 'bottom') styleString = this.removeBottomRadius(styleString);
+            else if (radiusMode === 'top')    styleString = this.removeTopRadius(styleString);
+            cell.setAttribute('style', this.hexStyle(this.applyBg(styleString, hexBackground)));
+        });
+    },
+
+    applyRowTrStyle(targetRow, sourceRow, hexBackground) {
+        const rowStyle = this.hexStyle(sourceRow?.getAttribute('style') || '');
+        targetRow.setAttribute('style', this.hexStyle(this.applyBg(rowStyle, hexBackground)));
+    },
+
+    cloneRowWithEmptyCells(sourceRow, hexBackground, { skipDateCell = false } = {}) {
+        if (!sourceRow) return document.createElement('tr');
+        const newRow = sourceRow.cloneNode(false);
+        this.applyRowTrStyle(newRow, sourceRow, hexBackground);
+        Array.from(sourceRow.cells).forEach(sourceCell => {
+            if (skipDateCell && (sourceCell.hasAttribute('rowspan') || sourceCell.id?.includes(CONSTANTS.USER_CONTENT_PREFIX))) return;
+            newRow.appendChild(TableUtils.createEmptyCell(sourceCell, hexBackground, { removeRadius: true }));
+        });
+        return newRow;
     },
 };
 window.StyleUtils = StyleUtils;
 
-// ═══════════════════════════════════════════════════════════
-//  getRowGroups — rowspan 기반 행 그룹핑 공통 함수
-// ═══════════════════════════════════════════════════════════
+const TableUtils = {
+    getTable(element) {
+        if (!element) return null;
+        return element.closest('table');
+    },
+    getTbody(tableElement) {
+        if (!tableElement) return null;
+        return tableElement.querySelector(':scope > tbody') || tableElement;
+    },
+    getRows(tbodyOrTable) {
+        if (!tbodyOrTable) return [];
+        return Array.from(tbodyOrTable.querySelectorAll(':scope > tr')).filter(row => row.cells.length > 0);
+    },
+    createEmptyCell(sourceCell, backgroundHex = null, options = { removeRadius: false }) {
+        if (!sourceCell) return document.createElement('td');
+        const clonedCell = sourceCell.cloneNode(false);
+        clonedCell.removeAttribute('rowspan');
+        let resolvedBackground = backgroundHex;
+        if (!resolvedBackground && sourceCell.hasAttribute('bgcolor')) {
+            const rawBgColor = sourceCell.getAttribute('bgcolor');
+            resolvedBackground = ColorManager.toOriginalForm(rawBgColor);
+        }
+        let styleString = sourceCell.getAttribute('style') || '';
+        if (resolvedBackground) {
+            styleString = StyleUtils.applyBg(styleString, resolvedBackground);
+        }
+        if (options.removeRadius) {
+            styleString = StyleUtils.removeRadius(styleString);
+        }
+        clonedCell.setAttribute('style', ColorManager.restoreColors(styleString));
+        clonedCell.removeAttribute('bgcolor'); 
+        clonedCell.innerHTML = '&nbsp;';
+        return clonedCell;
+    },
+    isDateCell(tableCell) {
+        if (!tableCell) return false;
+        const rowspan     = parseInt(tableCell.getAttribute('rowspan')) || 1;
+        const hasIdPrefix  = tableCell.id?.includes(CONSTANTS.USER_CONTENT_PREFIX);
+        const hasDateNumber = /\d/.test(tableCell.textContent.trim());
+        return rowspan >= 2 || hasIdPrefix || hasDateNumber;
+    }
+};
+
+const DateUtils = {
+    padNumberToMatch(number, referenceString) {
+        const reference = (referenceString || '').trim();
+        const paddingLength = (reference.startsWith('0') && /\d/.test(reference)) ? reference.length : 0;
+        return paddingLength > 0 ? String(number).padStart(paddingLength, '0') : String(number);
+    },
+    generateCellId(baseId, dateNumber, referenceString, fallbackPrefix = '') {
+        const paddedNumber = this.padNumberToMatch(dateNumber, referenceString);
+        if (baseId) {
+            return baseId.replace(/\d+$/, '') + paddedNumber;
+        } else if (fallbackPrefix) {
+            return `${CONSTANTS.USER_CONTENT_PREFIX}${fallbackPrefix}${dateNumber}`;
+        }
+        return '';
+    },
+};
+
 function getRowGroups(rows) {
     const groups = [];
-    let i = 0;
-    while (i < rows.length) {
-        const rs = parseInt(rows[i].cells[0]?.getAttribute('rowspan')) || 1;
-        groups.push(rows.slice(i, i + rs));
-        i += rs;
+    let rowIndex = 0;
+    while (rowIndex < rows.length) {
+        const rowspanValue = parseInt(rows[rowIndex].cells[0]?.getAttribute('rowspan')) || 1;
+        groups.push(rows.slice(rowIndex, rowIndex + rowspanValue));
+        rowIndex += rowspanValue;
     }
     return groups;
 }
 window.getRowGroups = getRowGroups;
 
 function findDataStartIdx(rows) {
-    for (let i = 0; i < rows.length; i++) {
-        const c0 = rows[i].cells[0];
-        if (!c0) continue;
-        const rs      = parseInt(c0.getAttribute('rowspan')) || 1;
-        const hasDate = /\d/.test(c0.textContent.trim()) || c0.id?.includes('user_content_');
-        if (rs >= 2 || hasDate) return i;
+    for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+        const firstCell = rows[rowIndex].cells[0];
+        if (!firstCell) continue;
+        if (TableUtils.isDateCell(firstCell)) return rowIndex;
     }
     return 0;
 }
 window.findDataStartIdx = findDataStartIdx;
 
-window.parseCellDate = function(cell) {
+window.parseCellDate = function (cell) {
     if (!cell) return null;
-    const text = cell.textContent.trim();
-    const dateMatch = text.match(/\d+/);
+    const textContent = cell.textContent.trim();
+    const dateMatch = textContent.match(/\d+/);
     if (!dateMatch) return null;
-
-    const dateNum = parseInt(dateMatch[0]);
-    const dayStr = (typeof DayManager !== 'undefined') ? DayManager.getDayStr(dateNum) : '';
-    return {
-        date: dateNum,
-        day: dayStr
-    };
+    const dateNumber = parseInt(dateMatch[0]);
+    const dayString  = (typeof DayManager !== 'undefined') ? DayManager.getDayStr(dateNumber) : '';
+    return { date: dateNumber, day: dayString };
 };
 
-function focusCellInPreview(targetTd, markerType = 'new') {
-    if (!targetTd) return;
-
-    const allTds = Array.from(preview.querySelectorAll('td'));
-    let liveTd = targetTd;
-
-    if (!preview.contains(targetTd)) {
-        const targetHtml = targetTd.outerHTML;
-        liveTd = allTds.find(td => td.outerHTML === targetHtml) || allTds[allTds.length - 1];
-    }
-    if (!liveTd) return;
-
-    if (liveTd.getAttribute('contenteditable') !== 'true') {
-        makeEditableOnlyCells(preview);
+function focusCellInPreview(targetCell, markerType = 'new') {
+    const preview = EditorState.get('preview');
+    const editor  = EditorState.get('editor');
+    if (!targetCell) return;
+    const outerTable = TableUtils.getTable(targetCell) || preview.querySelector('table');
+    const outerTbody = TableUtils.getTbody(outerTable);
+    const allOuterCells = [];
+    if (outerTbody) {
+        TableUtils.getRows(outerTbody).forEach(tableRow => {
+            allOuterCells.push(...Array.from(tableRow.cells));
+        });
     }
 
-    liveTd.focus();
-    const range = document.createRange();
-    range.selectNodeContents(liveTd);
-    range.collapse(true);
-    const sel = window.getSelection();
-    sel.removeAllRanges();
-    sel.addRange(range);
+    let liveCell = preview.contains(targetCell) ? targetCell : (allOuterCells.at(-1) || null);
+    if (!liveCell) return;
 
-    savedRange = range.cloneRange();
-    currentTargetNode = liveTd;
+    if (liveCell.getAttribute('contenteditable') !== 'true') makeEditableOnlyCells(preview);
+    liveCell.focus();
 
-    const tdIdx = allTds.indexOf(liveTd);
-    if (tdIdx === -1) return;
+    const selectionRange = document.createRange();
+    selectionRange.selectNodeContents(liveCell);
+    selectionRange.collapse(true);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(selectionRange);
 
-    const content = editor.getValue();
-    const tdRegex = /<td\b/gi;
-    let m, cnt = 0, tLine = -1;
-    while ((m = tdRegex.exec(content)) !== null) {
-        if (cnt === tdIdx) { tLine = content.substring(0, m.index).split('\n').length - 1; break; }
-        cnt++;
+    EditorState.set('savedRange', selectionRange.cloneRange());
+    EditorState.currentTargetNode = liveCell;
+
+    const allEditorCells = Array.from(preview.querySelectorAll('td, th'));
+    const cellIndexInEditor = allEditorCells.indexOf(liveCell);
+    if (cellIndexInEditor === -1) return;
+
+    const editorContent = editor.getValue();
+    const cellTagRegex = /<(?:td|th)\b/gi;
+    let regexMatch, cellCount = 0, targetLineNumber = -1;
+    while ((regexMatch = cellTagRegex.exec(editorContent)) !== null) {
+        if (cellCount === cellIndexInEditor) {
+            targetLineNumber = editorContent.substring(0, regexMatch.index).split('\n').length - 1;
+            break;
+        }
+        cellCount++;
     }
-    if (tLine === -1) return;
+    if (targetLineNumber === -1) return;
 
     editor.clearGutter('markers');
-    const mk = document.createElement('div');
-    mk.className = `working-marker working-marker--${markerType}`;
-    mk.innerHTML = '●';
-    editor.setGutterMarker(tLine, 'markers', mk);
-    editor.scrollIntoView({ line: tLine, ch: 0 }, 200);
+    const markerElement = document.createElement('div');
+    markerElement.className = `working-marker working-marker--${markerType}`;
+    markerElement.innerHTML = '●';
+    editor.setGutterMarker(targetLineNumber, 'markers', markerElement);
+    editor.scrollIntoView({ line: targetLineNumber, ch: 0 }, 200);
 
     if (window._headerLockRange && typeof window.applyHeaderLock === 'function') {
         requestAnimationFrame(() => window.applyHeaderLock());
@@ -259,27 +422,23 @@ function focusCellInPreview(targetTd, markerType = 'new') {
 }
 
 window.syncTableToEditor = function (tableElement, lockHeaderLines = false) {
+    const editor  = EditorState.get('editor');
+    const preview = EditorState.get('preview');
     if (!tableElement) return;
-    let html = tableElement.outerHTML;
-
-    html = html.replace(/\s*contenteditable="[^"]*"/gi, '');
-    html = html.replace(/\bcursor\s*:[^;"]*(;)?/gi, '');
-    html = html.replace(/\s*style=""/gi, '');
-    html = StyleUtils.hexStyle(html);
-
+	const tempTable = DomManager.clone(tableElement);
+	tempTable.querySelectorAll('td, th, [contenteditable]').forEach(el => DomManager.clean(el));
+	DomManager.clean(tempTable);
+	const html = StyleUtils.hexStyle(tempTable.outerHTML);
     withSyncLock(() => {
         if (typeof window.clearHeaderLock === 'function') window.clearHeaderLock();
-        const beautified = (typeof html_beautify !== 'undefined')
-            ? html_beautify(html, BEAUTIFY_OPTIONS)
-            : html;
-        editor.setValue(beautified);
+        const beautifiedHtml = safeBeautify(html);
+        editor.setValue(beautifiedHtml);
         if (editor.refresh) editor.refresh();
     });
-    if (typeof window.patchPreview === 'function') {
-        window.patchPreview(html);
-    } else {
-        preview.innerHTML = html;
-    }
+
+    if (typeof window.patchPreview === 'function') window.patchPreview(html);
+    else preview.innerHTML = html;
+
     makeEditableOnlyCells(preview);
 
     if (lockHeaderLines || window._headerLockRange) {
@@ -287,215 +446,197 @@ window.syncTableToEditor = function (tableElement, lockHeaderLines = false) {
     }
 };
 
-window.isCalendarTable = function() {
+window.isCalendarTable = function () {
+    const editor = EditorState.get('editor');
     if (!editor) return false;
-    const html = editor.getValue();
-    const doc = DomManager.parse(html);
-    if (!doc) return false;
-    const table = doc.querySelector('table');
+    const parsedDoc   = DomManager.parse(editor.getValue());
+    if (!parsedDoc) return false;
+    const table = parsedDoc.querySelector('table');
     if (!table) return false;
     const firstRow = table.querySelector('tr');
     if (!firstRow) return false;
-    const totalCols = Array.from(firstRow.cells).reduce(
-        (s, td) => s + (parseInt(td.getAttribute('colspan')) || 1), 0
-    );
-    return totalCols === 7;
+    const totalColumns = Array.from(firstRow.cells)
+        .reduce((sum, cell) => sum + (parseInt(cell.getAttribute('colspan')) || 1), 0);
+    return totalColumns === 7;
 };
 
-window.applyHeaderLock = function() {
+window.applyHeaderLock = function () {
+    const editor = EditorState.get('editor');
     if (!editor) return;
-    if (window.isCalendarTable()) {
-        window.releaseHeaderLock();
-        return;
-    }
+    if (window.isCalendarTable()) { window.releaseHeaderLock(); return; }
     window.clearHeaderLock();
 
-    const lines = editor.getValue().split('\n');
-    const totalLines = lines.length;
+    const allLines      = editor.getValue().split('\n');
+    const totalLineCount = allLines.length;
 
-    const tableLine = lines.findIndex(l => /<table[\s>]/i.test(l));
-    const tbodyLine = lines.findIndex(l => /<tbody[\s>]/i.test(l));
-
-    let closeTbodyLine = -1, closeTableLine = -1;
-    for (let i = totalLines - 1; i >= 0; i--) {
-        if (closeTableLine === -1 && /<\/table>/i.test(lines[i])) closeTableLine = i;
-        if (closeTbodyLine === -1 && /<\/tbody>/i.test(lines[i]))  closeTbodyLine = i;
-        if (closeTableLine !== -1 && closeTbodyLine !== -1) break;
+    const tableOpenLine  = allLines.findIndex(line => /<table[\s>]/i.test(line));
+    const tbodyOpenLine  = allLines.findIndex(line => /<tbody[\s>]/i.test(line));
+    let tbodyCloseLine = -1, tableCloseLine = -1;
+    for (let lineIndex = totalLineCount - 1; lineIndex >= 0; lineIndex--) {
+        if (tableCloseLine === -1 && /<\/table>/i.test(allLines[lineIndex])) tableCloseLine = lineIndex;
+        if (tbodyCloseLine === -1 && /<\/tbody>/i.test(allLines[lineIndex]))  tbodyCloseLine = lineIndex;
+        if (tableCloseLine !== -1 && tbodyCloseLine !== -1) break;
     }
+    if (tableOpenLine < 0 || tbodyOpenLine <= tableOpenLine) return;
 
-    if (tableLine < 0 || tbodyLine <= tableLine) return;
-
-    const headerEnd  = tbodyLine;          
-    const footerStart = closeTbodyLine >= 0 ? closeTbodyLine : closeTableLine; 
+    const headerEndLine   = tbodyOpenLine;
+    const footerStartLine = tbodyCloseLine >= 0 ? tbodyCloseLine : tableCloseLine;
 
     window._headerLockedLines = [];
-
-    for (let i = tableLine; i <= headerEnd; i++) {
-        editor.addLineClass(i, 'text', 'cm-header-locked');
-        window._headerLockedLines.push(i);
+    for (let lineIndex = tableOpenLine; lineIndex <= headerEndLine; lineIndex++) {
+        editor.addLineClass(lineIndex, 'text', 'cm-header-locked');
+        window._headerLockedLines.push(lineIndex);
     }
-    if (footerStart > headerEnd) {
-        const footerEnd = closeTableLine >= 0 ? closeTableLine : footerStart;
-        for (let i = footerStart; i <= footerEnd; i++) {
-            editor.addLineClass(i, 'text', 'cm-header-locked');
-            window._headerLockedLines.push(i);
+    if (footerStartLine > headerEndLine) {
+        const footerEndLine = tableCloseLine >= 0 ? tableCloseLine : footerStartLine;
+        for (let lineIndex = footerStartLine; lineIndex <= footerEndLine; lineIndex++) {
+            editor.addLineClass(lineIndex, 'text', 'cm-header-locked');
+            window._headerLockedLines.push(lineIndex);
         }
     }
-
     window._headerLockRange = {
-        trStart: tbodyLine + 1,
-        trEnd:   footerStart > 0 ? footerStart - 1 : totalLines - 1
+        trStart: tbodyOpenLine + 1,
+        trEnd:   footerStartLine > 0 ? footerStartLine - 1 : totalLineCount - 1,
     };
 };
 
-window.clearHeaderLock = function() {
+window.clearHeaderLock = function () {
+    const editor = EditorState.get('editor');
     if (window._headerLockedLines) {
-        window._headerLockedLines.forEach(i => {
-            try { editor.removeLineClass(i, 'text', 'cm-header-locked'); } catch(e) {}
+        window._headerLockedLines.forEach(lineIndex => {
+            try { editor.removeLineClass(lineIndex, 'text', 'cm-header-locked'); } catch (_) {}
         });
         window._headerLockedLines = [];
     }
 };
 
-window.releaseHeaderLock = function() {
+window.releaseHeaderLock = function () {
     window.clearHeaderLock();
     window._headerLockRange = null;
 };
 
-// ═══════════════════════════════════════════════════════════
-//  샘플 정제 
-// ═══════════════════════════════════════════════════════════
-
 function sanitizeHtml(html) {
-    return html
-        .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-        .replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, '')
-        .replace(/<object\b[^<]*(?:(?!<\/object>)<[^<]*)*<\/object>/gi, '')
-        .replace(/<embed\b[^>]*>/gi, '')
-        .replace(/<svg\b[^<]*(?:(?!<\/svg>)<[^<]*)*<\/svg>/gi, '')
-        .replace(/<link\b[^>]*>/gi, '')
-        .replace(/<meta\b[^>]*>/gi, '')
-        .replace(/<base\b[^>]*>/gi, '')
+    let result = html;
+    SANITIZE_CONFIG.pairedTags.forEach(tag => {
+        result = result.replace(new RegExp(`<${tag}\\b[^<]*(?:(?!<\\/${tag}>)<[^<]*)*<\\/${tag}>`, 'gi'), '');
+    });
+    SANITIZE_CONFIG.selfClosingTags.forEach(tag => {
+        result = result.replace(new RegExp(`<${tag}\\b[^>]*>`, 'gi'), '');
+    });
+    return result
         .replace(/\s+on\w+\s*=\s*["'][^"']*["']/gi, '')
-        .replace(/\s+on\w+\s*=\s*[^\s>]+/gi, '')
         .replace(/href\s*=\s*["']\s*javascript:[^"']*/gi, 'href="#"')
         .replace(/src\s*=\s*["']\s*javascript:[^"']*/gi, 'src=""');
 }
 
 function processAnalysis() {
-    const input = document.getElementById('analysisInput');
-    const raw = sanitizeHtml(input?.value.trim() || '');
-    if (!raw) {
-        SampleCache.set("");
-        if (input) input.value = "";
+    const inputElement = document.getElementById('analysisInput');
+    const sanitizedHtml = sanitizeHtml(inputElement?.value.trim() || '');
+
+    if (!sanitizedHtml) {
+        SampleCache.set('');
+        if (inputElement) inputElement.value = '';
         window.showToast('저장된 데이터가 삭제되었습니다.', 'info');
         return;
     }
-    const check = window.validateHtmlInput(raw, 'table');
-    if (!check.ok) {
-        window.showToast(check.reason, 'error');
-        if (input) input.value = "";
-        SampleCache.set("");
+    const validationResult = DomManager.validate(sanitizedHtml, 'table');
+    if (!validationResult.ok) {
+        window.showToast(validationResult.reason, 'error');
+        if (inputElement) inputElement.value = '';
+        SampleCache.set('');
         return;
     }
     try {
-        const cleanedHtml = getCleanTable(raw);
+        const cleanedHtml = getCleanTable(sanitizedHtml);
         if (cleanedHtml) {
-            input.value = cleanedHtml;
+            inputElement.value = cleanedHtml;
             SampleCache.set(cleanedHtml);
             window.showToast('데이터가 성공적으로 분석되었습니다.', 'success');
         } else {
-            if (input) input.value = "";
-            SampleCache.set("");
+            if (inputElement) inputElement.value = '';
+            SampleCache.set('');
             window.showToast('유효한 테이블 구조를 찾을 수 없어 초기화되었습니다.', 'error');
         }
-    } catch (e) {
+    } catch (_) {
         window.showToast('분석 중 오류가 발생하여 데이터를 비웁니다.', 'error');
-        if (input) input.value = "";
-        SampleCache.set("");
+        if (inputElement) inputElement.value = '';
+        SampleCache.set('');
     }
 }
 window.processAnalysis = processAnalysis;
 
 function getCleanTable(rawHtml) {
-    const doc = DomManager.parse(rawHtml);
-    const sourceTable = doc.querySelector('table');
+    const parsedDoc     = DomManager.parse(rawHtml);
+    const sourceTable   = parsedDoc?.querySelector('table');
     if (!sourceTable) return null;
- 
-    sourceTable.querySelectorAll('td table, th table').forEach(nt => nt.remove());
-    const cleanTable = document.createElement('table');
-    Array.from(sourceTable.attributes).forEach(a => cleanTable.setAttribute(a.name, a.value));
-    const tableStyleAttr = cleanTable.getAttribute('style') || '';
+
+    sourceTable.querySelectorAll('td table, th table').forEach(nestedTable => nestedTable.remove());
+
+    const cleanTable        = document.createElement('table');
+    Array.from(sourceTable.attributes).forEach(attribute => cleanTable.setAttribute(attribute.name, attribute.value));
+    const tableStyleAttr    = cleanTable.getAttribute('style') || '';
     if (!/border-collapse/i.test(tableStyleAttr)) {
         cleanTable.setAttribute('style', (tableStyleAttr + ';border-collapse:collapse').replace(/^;/, ''));
     }
- 
-    const caption = sourceTable.querySelector(':scope > caption');
-    if (caption) cleanTable.appendChild(caption.cloneNode(true));
-    sourceTable.querySelectorAll(':scope > colgroup').forEach(cg => cleanTable.appendChild(cg.cloneNode(true)));
- 
-    const srcThead = sourceTable.querySelector(':scope > thead');
-    if (srcThead) cleanTable.appendChild(srcThead.cloneNode(true));
-    const tbodies = Array.from(sourceTable.querySelectorAll(':scope > tbody'));
- 
-    const firstTr = sourceTable.querySelector('tr');
-    const totalCols = firstTr
-        ? Array.from(firstTr.cells).reduce((s, td) => s + (parseInt(td.getAttribute('colspan')) || 1), 0)
+
+    const captionElement = sourceTable.querySelector(':scope > caption');
+    if (captionElement) cleanTable.appendChild(captionElement.cloneNode(true));
+    sourceTable.querySelectorAll(':scope > colgroup').forEach(colgroup => cleanTable.appendChild(colgroup.cloneNode(true)));
+
+    const sourceThead  = sourceTable.querySelector(':scope > thead');
+    if (sourceThead) cleanTable.appendChild(sourceThead.cloneNode(true));
+    const tbodyElements = Array.from(sourceTable.querySelectorAll(':scope > tbody'));
+
+    const firstTableRow = sourceTable.querySelector('tr');
+    const totalColumns  = firstTableRow
+        ? Array.from(firstTableRow.cells).reduce((sum, cell) => sum + (parseInt(cell.getAttribute('colspan')) || 1), 0)
         : 3;
- 
-    function isHeaderRow(tr) {
-        return tr.querySelector('th') !== null;
+
+    function isHeaderRow(tableRow)    { return tableRow.querySelector('th') !== null; }
+    function isSubHeaderRow(tableRow) {
+        if (tableRow.querySelector('th')) return false;
+        const cells = Array.from(tableRow.cells);
+        if (!cells.length) return false;
+        const totalColspan = cells.reduce((sum, cell) => sum + (parseInt(cell.getAttribute('colspan')) || 1), 0);
+        return totalColspan >= totalColumns && cells.length < totalColumns;
     }
-    function isSubHeaderRow(tr) {
-        if (tr.querySelector('th')) return false;
-        const cells = Array.from(tr.cells);
-        if (cells.length === 0) return false;
-        const span = cells.reduce((s, td) => s + (parseInt(td.getAttribute('colspan')) || 1), 0);
-        return span >= totalCols && cells.length < totalCols;
+    function isDataGroupStart(tableRow) {
+        return TableUtils.isDateCell(tableRow.cells[0]);
     }
-    function isDataGroupStart(tr) {
-        const c0 = tr.cells[0];
-        if (!c0) return false;
-        if ((parseInt(c0.getAttribute('rowspan')) || 1) >= 2) return true;
-        if (/^\d{1,2}$/.test(c0.textContent.trim())) return true;
-        if (c0.id?.includes('user_content_')) return true;
-        return false;
-    }
- 
+
     let headerRows = [], subHeaderRows = [], dataRows;
- 
-    if (srcThead) {
-        dataRows = tbodies.flatMap(tb => Array.from(tb.querySelectorAll(':scope > tr')));
+
+    if (sourceThead) {
+        dataRows = tbodyElements.flatMap(tbody => TableUtils.getRows(tbody));
     } else {
-        const allRows = tbodies.length > 0
-            ? tbodies.flatMap(tb => Array.from(tb.querySelectorAll(':scope > tr')))
-            : Array.from(sourceTable.querySelectorAll('tr'))
-                .filter(tr => tr.parentElement.closest('table') === sourceTable);
- 
-        let dataStart = allRows.length;
-        for (let i = 0; i < allRows.length; i++) {
-            if (isDataGroupStart(allRows[i])) { dataStart = i; break; }
-            if (isHeaderRow(allRows[i]))           headerRows.push(allRows[i]);
-            else if (isSubHeaderRow(allRows[i]))   subHeaderRows.push(allRows[i]);
-            else                                   headerRows.push(allRows[i]);
+        const allRows = tbodyElements.length > 0
+            ? tbodyElements.flatMap(tbody => TableUtils.getRows(tbody))
+            : TableUtils.getRows(TableUtils.getTbody(sourceTable));
+
+        let dataStartIndex = allRows.length;
+        for (let rowIndex = 0; rowIndex < allRows.length; rowIndex++) {
+            if (isDataGroupStart(allRows[rowIndex])) { dataStartIndex = rowIndex; break; }
+            if (isHeaderRow(allRows[rowIndex]))           headerRows.push(allRows[rowIndex]);
+            else if (isSubHeaderRow(allRows[rowIndex]))   subHeaderRows.push(allRows[rowIndex]);
+            else                                          headerRows.push(allRows[rowIndex]);
         }
-        dataRows = allRows.slice(dataStart);
+        dataRows = allRows.slice(dataStartIndex);
     }
- 
+
     const dateGroups = [];
-    let spanLeft = 0, currentGroup = [];
-    dataRows.forEach(tr => {
-        if (spanLeft === 0) {
+    let remainingRowspan = 0, currentGroup = [];
+    dataRows.forEach(tableRow => {
+        if (remainingRowspan === 0) {
             if (currentGroup.length > 0) dateGroups.push({ rows: currentGroup });
             currentGroup = [];
-            spanLeft = parseInt(tr.cells[0]?.getAttribute('rowspan')) || 1;
+            remainingRowspan = parseInt(tableRow.cells[0]?.getAttribute('rowspan')) || 1;
         }
-        currentGroup.push(tr);
-        spanLeft--;
+        currentGroup.push(tableRow);
+        remainingRowspan--;
     });
     if (currentGroup.length > 0) dateGroups.push({ rows: currentGroup });
- 
-    const COMPARE_KEYS = new Set([
+
+    const COMPARE_STYLE_KEYS = new Set([
         'background', 'background-color', 'color',
         'border', 'border-top', 'border-right', 'border-bottom', 'border-left',
         'border-color', 'border-top-color', 'border-right-color',
@@ -505,153 +646,169 @@ function getCleanTable(rawHtml) {
         'border-bottom-left-radius', 'border-bottom-right-radius',
         'outline', 'outline-color',
     ]);
- 
-    function getTrStyleMap(tr) {
-        const dc = tr.cells[0];
-        const combined = [
-            tr.getAttribute('style') || '',
-            dc?.getAttribute('style') || '',
-            dc?.getAttribute('bgcolor') ? `background-color:${dc.getAttribute('bgcolor')}` : ''
+
+    function getRowStyleMap(tableRow) {
+        const datumCell = tableRow.cells[0];
+        const combinedStyle = [
+            tableRow.getAttribute('style') || '',
+            datumCell?.getAttribute('style') || '',
+            datumCell?.getAttribute('bgcolor') ? `background-color:${datumCell.getAttribute('bgcolor')}` : '',
         ].join(';');
-        const full = StyleUtils.parseStyleForCompare(combined);
-        const filtered = {};
-        COMPARE_KEYS.forEach(k => { if (full[k] !== undefined) filtered[k] = full[k]; });
-        return filtered;
+        const fullStyleMap = ColorManager.parseStyleString(combinedStyle);
+        const filteredMap  = {};
+        COMPARE_STYLE_KEYS.forEach(key => { if (fullStyleMap[key] !== undefined) filteredMap[key] = fullStyleMap[key]; });
+        return filteredMap;
     }
- 
-    function styleMapsEqual(m1, m2) {
-        const keys = new Set([...Object.keys(m1), ...Object.keys(m2)]);
-        for (const k of keys) if ((m1[k] || '') !== (m2[k] || '')) return false;
+
+    function styleMapsEqual(map1, map2) {
+        const allKeys = new Set([...Object.keys(map1), ...Object.keys(map2)]);
+        for (const key of allKeys) if ((map1[key] || '') !== (map2[key] || '')) return false;
         return true;
     }
- 
+
     let keepGroups;
     if      (dateGroups.length === 0) keepGroups = [];
     else if (dateGroups.length === 1) keepGroups = [dateGroups[0]];
     else {
-        const s1 = getTrStyleMap(dateGroups[0].rows[0]);
-        const s2 = getTrStyleMap(dateGroups[1].rows[0]);
-        keepGroups = styleMapsEqual(s1, s2) ? [dateGroups[0]] : [dateGroups[0], dateGroups[1]];
+        const firstGroupStyle  = getRowStyleMap(dateGroups[0].rows[0]);
+        const secondGroupStyle = getRowStyleMap(dateGroups[1].rows[0]);
+        keepGroups = styleMapsEqual(firstGroupStyle, secondGroupStyle) ? [dateGroups[0]] : [dateGroups[0], dateGroups[1]];
     }
- 
+
     function buildCleanRows(group) {
-        const result  = [];
-        const src0    = group.rows[0];
-        const srcLast = group.rows[group.rows.length - 1];
-        const isMulti = group.rows.length > 1;
-        const rowSpanVal = isMulti ? 2 : 1;
- 
-        [src0, ...(isMulti ? [srcLast] : [])].forEach((src, order) => {
-            const tr = src.cloneNode(false);
-            Array.from(src.cells).forEach((sc, ci) => {
-                const tc = sc.cloneNode(false);
-                const rawStyle = sc.getAttribute('style') || '';
-                if (rawStyle) tc.setAttribute('style', StyleUtils.hexStyle(rawStyle));
-                if (sc.hasAttribute('bgcolor')) tc.setAttribute('bgcolor', window.rgbToHex(sc.getAttribute('bgcolor')));
-                if (order === 0 && ci === 0) {
-                    tc.innerHTML = StyleUtils.hexStyle(sc.innerHTML.trim());
-                    tc.rowSpan = rowSpanVal;
+        const cleanRows     = [];
+        const firstSourceRow = group.rows[0];
+        const lastSourceRow  = group.rows[group.rows.length - 1];
+        const isMultiRow     = group.rows.length > 1;
+        const rowSpanValue   = isMultiRow ? 2 : 1;
+
+        [firstSourceRow, ...(isMultiRow ? [lastSourceRow] : [])].forEach((sourceRow, orderIndex) => {
+            const newRow = sourceRow.cloneNode(false);
+            Array.from(sourceRow.cells).forEach((sourceCell, cellIndex) => {
+                let targetCell;
+                if (orderIndex === 0 && cellIndex === 0) {
+                    targetCell = sourceCell.cloneNode(true);
+                    targetCell.rowSpan   = rowSpanValue;
+                    targetCell.innerHTML = StyleUtils.hexStyle(sourceCell.innerHTML.trim());
+                    if (targetCell.hasAttribute('style')) {
+                        targetCell.setAttribute('style', StyleUtils.hexStyle(targetCell.getAttribute('style')));
+                    }
                 } else {
-                    tc.innerHTML = '&nbsp;';
-                    if (tc.rowSpan > 1) tc.rowSpan = 1;
+                    targetCell = TableUtils.createEmptyCell(sourceCell);
                 }
-                tr.appendChild(tc);
+                newRow.appendChild(targetCell);
             });
-            result.push(tr);
+            cleanRows.push(newRow);
         });
-        return result;
+        return cleanRows;
     }
- 
-    if (!srcThead && headerRows.length > 0) {
+
+    if (!sourceThead && headerRows.length > 0) {
         const newThead = document.createElement('thead');
-        headerRows.forEach(r => newThead.appendChild(r.cloneNode(true)));
+        headerRows.forEach(row => newThead.appendChild(row.cloneNode(true)));
         cleanTable.appendChild(newThead);
     }
- 
+
     const finalTbody = document.createElement('tbody');
-    const tbodyStyle = tbodies[0]?.getAttribute('style');
-    if (tbodyStyle) finalTbody.setAttribute('style', tbodyStyle);
- 
-    subHeaderRows.forEach(r => finalTbody.appendChild(r.cloneNode(true)));
-    keepGroups.forEach(g => buildCleanRows(g).forEach(tr => finalTbody.appendChild(tr)));
+    const tbodyStyleAttr = tbodyElements[0]?.getAttribute('style');
+    if (tbodyStyleAttr) finalTbody.setAttribute('style', tbodyStyleAttr);
+
+    subHeaderRows.forEach(row => finalTbody.appendChild(row.cloneNode(true)));
+    keepGroups.forEach(group => buildCleanRows(group).forEach(row => finalTbody.appendChild(row)));
     cleanTable.appendChild(finalTbody);
- 
-    const tfoot = sourceTable.querySelector(':scope > tfoot');
-    if (tfoot) cleanTable.appendChild(tfoot.cloneNode(true));
- 
-    const temp = document.createElement('div');
-    temp.style.display = 'none';
-    document.body.appendChild(temp);
-    temp.appendChild(cleanTable);
-    const result = temp.innerHTML;
-    document.body.removeChild(temp);
-    return result;
+
+    const tfootElement = sourceTable.querySelector(':scope > tfoot');
+    if (tfootElement) cleanTable.appendChild(tfootElement.cloneNode(true));
+
+    const tempContainer = document.createElement('div');
+    tempContainer.style.display = 'none';
+    document.body.appendChild(tempContainer);
+    tempContainer.appendChild(cleanTable);
+    const resultHtml = tempContainer.innerHTML;
+    document.body.removeChild(tempContainer);
+    return resultHtml;
 }
 
-// ═══════════════════════════════════════════════════════════
-//  커스텀 툴바 규칙 설정
-// ═══════════════════════════════════════════════════════════
+const RULE_ITEM_CONFIG = [
+    { width: '25%', field: 'name', type: 'input',    placeholder: '표시 이름' },
+    { width: '65%', field: 'html', type: 'textarea', placeholder: 'HTML 코드를 입력하세요' },
+    { width: '10%', field: 'del',  type: 'button',   label: '×' }
+];
+
+function createRuleItemRow(item = { name: '', html: '' }) {
+    const row = document.createElement('tr'); 
+    const cells = RULE_ITEM_CONFIG.map(config => {
+        let content = '';
+        if (config.type === 'input') {
+            content = `<input type="text" class="modal-input" value="${item.name || ''}" placeholder="${config.placeholder}">`;
+        } else if (config.type === 'textarea') {
+            content = `<textarea class="modal-input code-area" placeholder="${config.placeholder}">${item.html || ''}</textarea>`;
+        } else if (config.type === 'button') {
+            content = `<button class="btn-del-item" onclick="this.closest('tr').remove()">${config.label}</button>`;
+        }
+        return `<td style="width:${config.width}">${content}</td>`;
+    });
+
+    row.innerHTML = cells.join('');
+    return row;
+}
+
 function addGroup() {
     const container = document.getElementById('ruleGroupsContainer');
-    const newGroup  = document.createElement('div');
-    newGroup.className = 'rule-group-card';
-    newGroup.innerHTML = `
+    const newGroupCard  = document.createElement('div');
+    newGroupCard.className = 'rule-group-card';
+    newGroupCard.innerHTML = `
         <div class="group-header">
-            <input type="text" class="group-name-input" placeholder="그룹 이름 (예: 카테고리1)">
+            <input type="text" class="group-name-input" placeholder="그룹 이름 (예: 카테고리 1)">
             <button class="btn-del-group" onclick="this.closest('.rule-group-card').remove()">그룹 삭제</button>
         </div>
         <table class="rule-item-table">
-            <tbody class="item-list">
-                <tr>
-                    <td style="width:25%"><input type="text" class="modal-input" placeholder="표시 이름"></td>
-                    <td style="width:65%"><textarea class="modal-input code-area" placeholder="HTML 코드를 입력하세요"></textarea></td>
-                    <td style="width:10%"><button class="btn-del-item" onclick="this.closest('tr').remove()">×</button></td>
-                </tr>
-            </tbody>
+            <tbody class="item-list"></tbody>
         </table>
-        <button class="btn-add-item-dashed" onclick="addItem(this)">+ 항목 추가</button>
+        <button class="btn-add-item-dashed" onclick="addItem(this)">+ 새 항목 추가</button>
     `;
-    container.appendChild(newGroup);
+	const itemListBody = newGroupCard.querySelector('.item-list');
+    itemListBody.appendChild(createRuleItemRow());
+    container.appendChild(newGroupCard);
+	return { 
+        card: newGroupCard, 
+        itemListBody: itemListBody 
+    };
 }
 window.addGroup = addGroup;
 
-function addItem(btn) {
-    const tbody  = btn.closest('.rule-group-card').querySelector('.item-list');
-    const newRow = document.createElement('tr');
-    newRow.innerHTML = `
-        <td><input type="text" class="modal-input" placeholder="표시 이름"></td>
-        <td><textarea class="modal-input code-area" placeholder="HTML 코드를 입력하세요"></textarea></td>
-        <td><button class="btn-del-item" onclick="this.closest('tr').remove()">×</button></td>
-    `;
-    tbody.appendChild(newRow);
+function addItem(button) {
+    const itemListBody = button.closest('.rule-group-card').querySelector('.item-list');
+    const newRow = createRuleItemRow(); 
+    itemListBody.appendChild(newRow);
 }
 window.addItem = addItem;
 
 function applyAndSaveRules() {
     const container  = document.getElementById('ruleGroupsContainer');
     const groupCards = container.querySelectorAll('.rule-group-card');
-    const groups     = [];
+    const allGroups  = [];
 
     groupCards.forEach(card => {
         const groupName = card.querySelector('.group-name-input').value;
-        const items     = [];
+        const groupItems = [];
         card.querySelectorAll('.item-list tr').forEach(row => {
-            const inputs = row.querySelectorAll('input, textarea');
-            if (inputs[0].value.trim() || inputs[1].value.trim()) {
-                items.push({ name: inputs[0].value, html: inputs[1].value });
+            const inputFields = row.querySelectorAll('input, textarea');
+            if (inputFields[0].value.trim() || inputFields[1].value.trim()) {
+                groupItems.push({ name: inputFields[0].value, html: inputFields[1].value });
             }
         });
-        if (items.length > 0 || groupName.trim()) groups.push({ groupName, items });
+        if (groupItems.length > 0 || groupName.trim()) allGroups.push({ groupName, items: groupItems });
     });
 
-    if (groups.length === 0) {
+    if (allGroups.length === 0) {
         if (confirm('입력된 규칙이 없습니다. 기존 설정으로 되돌리시겠습니까?')) {
             window.renderRules?.();
             closeModal('ruleModal');
         }
         return;
     }
-    AppStore.set('custom_toolbar_rules', groups);
+    AppStore.set('custom_toolbar_rules', allGroups);
     window.showToast('설정이 저장되었습니다.');
     window.updatePreview?.(true);
     closeModal('ruleModal');
@@ -660,123 +817,123 @@ window.applyAndSaveRules = applyAndSaveRules;
 
 window.renderRules = function () {
     const container = document.getElementById('ruleGroupsContainer');
-    const groups    = AppStore.get('custom_toolbar_rules');
+    const savedGroups = AppStore.get('custom_toolbar_rules');
     container.innerHTML = '';
 
-    if (!groups || groups.length === 0) { addGroup(); return; }
-
-    groups.forEach(groupData => {
-        addGroup();
-        const lastGroup = container.lastElementChild;
-        lastGroup.querySelector('.group-name-input').value = groupData.groupName;
-        const tbody = lastGroup.querySelector('.item-list');
-        tbody.innerHTML = '';
-        const items = groupData.items.length > 0 ? groupData.items : [{ name: '', html: '' }];
+    if (!savedGroups || savedGroups.length === 0) { 
+        addGroup(); 
+        return; 
+    }
+    savedGroups.forEach(groupData => {
+        const { card, itemListBody } = addGroup();
+        card.querySelector('.group-name-input').value = groupData.groupName;
+        itemListBody.innerHTML = '';
+        const items = groupData.items.length > 0 ? groupData.items : [{ name: '', html: '' }];      
         items.forEach(item => {
-            const row = document.createElement('tr');
-            row.innerHTML = `
-                <td style="width:25%"><input type="text" class="modal-input" value="${item.name}" placeholder="표시 이름"></td>
-                <td style="width:65%"><textarea class="modal-input code-area" placeholder="HTML 코드를 입력하세요">${item.html}</textarea></td>
-                <td style="width:10%"><button class="btn-del-item" onclick="this.closest('tr').remove()">×</button></td>
-            `;
-            tbody.appendChild(row);
+            itemListBody.appendChild(createRuleItemRow(item));
         });
     });
 };
 
-window.updatePreview = function (forceShow = false) {
-    const toolbar = document.getElementById('customToolbar');
-    const groups  = AppStore.get('custom_toolbar_rules');
+function _setCustomToolbarVisible(toolbar, visible) {
+    const mainContainer = document.querySelector('.main-container');
+    toolbar.style.display = visible ? 'flex' : 'none';
+    if (!mainContainer) return;
+    if (visible) {
+        requestAnimationFrame(() => {
+            const toolbarHeight = toolbar.getBoundingClientRect().height;
+            mainContainer.style.marginTop = (CONSTANTS.TOOLBAR_HEIGHT + toolbarHeight) + 'px';
+        });
+    } else {
+        mainContainer.style.marginTop = CONSTANTS.TOOLBAR_HEIGHT + 'px';
+    }
+}
 
-    if (!groups || groups.length === 0) {
-        toolbar.style.display = 'none';
+window.updatePreview = function (forceShow = false) {
+    const toolbar     = document.getElementById('customToolbar');
+    const savedGroups = AppStore.get('custom_toolbar_rules');
+
+    if (!savedGroups || savedGroups.length === 0) {
+        _setCustomToolbarVisible(toolbar, false);
         toolbar.innerHTML = '';
         return;
     }
-    if (forceShow || toolbar.style.display === 'flex') {
-        toolbar.style.display = 'flex';
-    } else {
-        toolbar.style.display = 'none';
+    if (!forceShow && toolbar.style.display !== 'flex') {
+        _setCustomToolbarVisible(toolbar, false);
         return;
     }
+    _setCustomToolbarVisible(toolbar, true);
 
     toolbar.innerHTML = '';
-    groups.forEach(group => {
-        const select = document.createElement('select');
-        select.className = 'custom-rule-select';
+    savedGroups.forEach(group => {
+        const selectElement = document.createElement('select');
+        selectElement.className = 'custom-rule-select';
 
-        const titleOpt = document.createElement('option');
-        titleOpt.text = group.groupName || '그룹 선택';
-        titleOpt.value = '';
-        titleOpt.disabled = titleOpt.selected = true;
-        select.appendChild(titleOpt);
+        const titleOption = document.createElement('option');
+        titleOption.text  = group.groupName || '그룹 선택';
+        titleOption.value = '';
+        titleOption.disabled = titleOption.selected = true;
+        selectElement.appendChild(titleOption);
 
         group.items.forEach(item => {
             if (item.name.trim() || item.html.trim()) {
-                const opt = document.createElement('option');
-                opt.value = item.html;
-                opt.text  = item.name || '내용 없음';
-                select.appendChild(opt);
+                const option = document.createElement('option');
+                option.value = item.html;
+                option.text  = item.name || '내용 없음';
+                selectElement.appendChild(option);
             }
         });
 
-        let _customSelectTimer = null;
-        select.onchange = function () {
+        let _selectDebounceTimer = null;
+        selectElement.onchange = function () {
             if (!this.value) return;
             const htmlToInsert = this.value;
             this.selectedIndex = 0;
-            clearTimeout(_customSelectTimer);
-            _customSelectTimer = setTimeout(() => {
-                isSyncing = true;
+            clearTimeout(_selectDebounceTimer);
+            _selectDebounceTimer = setTimeout(() => {
+                const savedRange = EditorState.get('savedRange');
+                EditorState.startSync();
                 if (savedRange) {
-                    const sel = window.getSelection();
-                    sel.removeAllRanges();
-                    sel.addRange(savedRange);
+                    const selection = window.getSelection();
+                    selection.removeAllRanges();
+                    selection.addRange(savedRange);
                     const fragment = savedRange.createContextualFragment(htmlToInsert);
-                    const lastNode = fragment.lastChild;
+                    const lastInsertedNode = fragment.lastChild;
                     savedRange.deleteContents();
                     savedRange.insertNode(fragment);
-                    if (lastNode) {
-                        const r = document.createRange();
-                        r.setStartAfter(lastNode);
-                        r.setEndAfter(lastNode);
-                        sel.removeAllRanges();
-                        sel.addRange(r);
-                        savedRange = r.cloneRange();
+                    if (lastInsertedNode) {
+                        const newRange = document.createRange();
+                        newRange.setStartAfter(lastInsertedNode);
+                        newRange.setEndAfter(lastInsertedNode);
+                        selection.removeAllRanges();
+                        selection.addRange(newRange);
+                        EditorState.set('savedRange', newRange.cloneRange());
                     }
                 }
-                setTimeout(() => {
-                    isSyncing = false;
-                    window.syncPreviewToEditor?.();
-                }, 100);
+                // isSyncing을 즉시 해제한 뒤 다음 tick에 동기화
+                // endSync(false)의 50ms 지연이 남아있으면 syncPreviewToEditor가 guard에 걸려 실패함
+                EditorState.endSync(true);
+                requestAnimationFrame(() => window.syncPreviewToEditor?.());
             }, 0);
         };
-        toolbar.appendChild(select);
+        toolbar.appendChild(selectElement);
     });
 };
 
-// ═══════════════════════════════════════════════════════════
-//  캘린더 생성/변환
-// ═══════════════════════════════════════════════════════════
 const dayMaps = {
     ko_short: ['일','월','화','수','목','금','토'],
     ko_long:  ['일요일','월요일','화요일','수요일','목요일','금요일','토요일'],
-    en_short: ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'], // 'MON' 대신 'Mon'
-    en_long:  ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday']
+    en_short: ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'],
+    en_long:  ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'],
 };
 
-
 const _dayMatchOrder = ['ko_long', 'en_long', 'ko_short', 'en_short'];
-const _dayMapsLower = Object.fromEntries(
-    Object.entries(dayMaps).map(([k, v]) => [k, v.map(d => d.toLowerCase())])
+const _dayMapsLower  = Object.fromEntries(
+    Object.entries(dayMaps).map(([key, labels]) => [key, labels.map(label => label.toLowerCase())])
 );
 
 const DayManager = {
-    DAY_IDX: {
-        WEEKDAY: 0,
-        SAT: 1,
-        SUN: 2
-    },
+    DAY_IDX: { WEEKDAY: 0, SAT: 1, SUN: 2 },
     getAllPatterns() {
         return Object.values(dayMaps).flat().sort((a, b) => b.length - a.length);
     },
@@ -787,31 +944,43 @@ const DayManager = {
     },
     getIdxFromText(text) {
         if (!text) return -1;
-        const lower = text.toLowerCase();
-        for (const key of _dayMatchOrder) {
-            const idx = _dayMapsLower[key].findIndex(d => lower.includes(d));
-            if (idx !== -1) return idx;
+        const lowerText = text.toLowerCase();
+        for (const mapKey of _dayMatchOrder) {
+            const foundIndex = _dayMapsLower[mapKey].findIndex(label => lowerText.includes(label));
+            if (foundIndex !== -1) return foundIndex;
         }
         return -1;
     },
     getTypeFromText(text) {
         if (!text) return 'ko_short';
-        const lower = text.toLowerCase();
-        for (const key of _dayMatchOrder) {
-            if (_dayMapsLower[key].some(d => lower.includes(d))) return key;
+        const lowerText = text.toLowerCase();
+        for (const mapKey of _dayMatchOrder) {
+            if (_dayMapsLower[mapKey].some(label => lowerText.includes(label))) return mapKey;
         }
         return 'ko_short';
     },
-    getLabel(idx, type = 'ko_short') {
-        return dayMaps[type]?.[idx] || '';
-    },
-    getDayStr(idx, type = 'ko_short') {
-        return this.getLabel(idx, type);
+    getLabel(dayIndex, type = 'ko_short') { return dayMaps[type]?.[dayIndex] || ''; },
+    getDayStr(dayIndex, type = 'ko_short') { return this.getLabel(dayIndex, type); },
+};
+
+const CALENDAR_THEME = {
+    COLORS: {
+        SUN: 'red',
+        SAT: 'blue',
+        WEEKDAY: '#333333',
+        DEFAULT: '#333333'
     }
 };
 
-function isValidYearMonth(ym) {
-    const parts = ym.split('/');
+function getCalendarColor(columnIndex, showHoliday) {
+    if (!showHoliday) return CALENDAR_THEME.COLORS.DEFAULT;
+    if (columnIndex === 0) return CALENDAR_THEME.COLORS.SUN;
+    if (columnIndex === 6) return CALENDAR_THEME.COLORS.SAT;
+    return CALENDAR_THEME.COLORS.WEEKDAY;
+}
+
+function isValidYearMonth(yearMonth) {
+    const parts = yearMonth.split('/');
     if (parts.length !== 2) return false;
     const [year, month] = parts.map(Number);
     return !isNaN(year) && !isNaN(month) && year > 0 && month >= 1 && month <= 12;
@@ -821,34 +990,34 @@ window.isValidYearMonth = isValidYearMonth;
 function generateBaseCalendar(yearMonth, options = {}) {
     const { showHoliday = true, useId = false, baseId = '', lineHeight = '2' } = options;
     const [year, month] = yearMonth.split('/').map(Number);
-    const firstDay = new Date(year, month - 1, 1).getDay();
-    const lastDate = new Date(year, month, 0).getDate();
+    const firstDayOfWeek = new Date(year, month - 1, 1).getDay();
+    const lastDateOfMonth = new Date(year, month, 0).getDate();
 
+    const weekdayLabels = dayMaps.ko_short;
     let html = `<table style="width:100%;table-layout:fixed;border-collapse:collapse;border:1px solid #ddd;text-align:center;line-height:${lineHeight};">\n`;
-    const weekDays = dayMaps.ko_short;
     html += `  <thead>\n    <tr>\n`;
-    weekDays.forEach((day, i) => {
-        const color = showHoliday ? (i === 0 ? 'red' : i === 6 ? 'blue' : '#333333') : '#333333';
-        html += `      <th style="width:14%;padding:10px;color:${color};">${day}</th>\n`;
+    weekdayLabels.forEach((dayLabel, columnIndex) => {
+        const color = getCalendarColor(columnIndex, showHoliday);
+        html += `      <th style="width:14%;padding:10px;color:${color};">${dayLabel}</th>\n`;
     });
     html += `    </tr>\n  </thead>\n  <tbody>\n`;
 
-    let date = 1;
-    for (let i = 0; i < 6; i++) {
-        if (date > lastDate) break;
+    let currentDate = 1;
+    for (let weekRow = 0; weekRow < 6; weekRow++) {
+        if (currentDate > lastDateOfMonth) break;
         html += `    <tr>\n`;
-        for (let j = 0; j < 7; j++) {
-            if ((i === 0 && j < firstDay) || date > lastDate) {
+        for (let columnIndex = 0; columnIndex < 7; columnIndex++) {
+            if ((weekRow === 0 && columnIndex < firstDayOfWeek) || currentDate > lastDateOfMonth) {
                 html += `      <td></td>\n`;
             } else {
-                const color   = showHoliday ? (j === 0 ? 'red' : j === 6 ? 'blue' : '#333333') : '#333333';
-                const dateText = `<span style="color:${color};">${date}</span>`;
-                const idStr    = baseId ? `${baseId}_${date}` : date;
+                const color = getCalendarColor(columnIndex, showHoliday);
+                const dateText = `<span style="color:${color};">${currentDate}</span>`;
+                const cellId   = baseId ? `${baseId}_${currentDate}` : currentDate;
                 const content  = useId
-                    ? `<a href="#user_content_${idStr}" style="text-decoration:none;">${dateText}</a>`
+                    ? `<a href="#${CONSTANTS.USER_CONTENT_PREFIX}${cellId}" style="text-decoration:none;">${dateText}</a>`
                     : dateText;
                 html += `      <td style="padding:10px;">${content}</td>\n`;
-                date++;
+                currentDate++;
             }
         }
         html += `    </tr>\n`;
@@ -858,433 +1027,295 @@ function generateBaseCalendar(yearMonth, options = {}) {
 }
 window.generateBaseCalendar = generateBaseCalendar;
 
-function transformAdvancedCalendar(sourceHtml, fromYM, toYM) {
-    const doc = DomManager.parse(sourceHtml);
-    const table = doc.querySelector('table');
+function transformAdvancedCalendar(sourceHtml, fromYearMonth, toYearMonth) {
+    const parsedDoc = DomManager.parse(sourceHtml);
+    const table     = parsedDoc?.querySelector('table');
     if (!table) return sourceHtml;
 
-    const [toYear, toMonth] = toYM.split('/').map(Number);
-    const firstDay = new Date(toYear, toMonth - 1, 1).getDay();
-    const lastDate = new Date(toYear, toMonth, 0).getDate();
+    const [toYear, toMonth] = toYearMonth.split('/').map(Number);
+    const firstDayOfWeek = new Date(toYear, toMonth - 1, 1).getDay();
+    const lastDateOfMonth = new Date(toYear, toMonth, 0).getDate();
 
-    const tbody = table.querySelector('tbody');
-    if (!tbody) return sourceHtml;
+    const tbody    = TableUtils.getTbody(table);
+    if (!tbody || tbody === table) return sourceHtml;
 
-    const tdTemplates = { sun: null, sat: null, work: null };
-    const srcRows = Array.from(tbody.querySelectorAll('tr'));
+    const cellTemplates = { sun: null, sat: null, work: null };
+    const sourceRows    = TableUtils.getRows(tbody);
 
-    srcRows.forEach(tr => {
-        tr.querySelectorAll('td').forEach((td, colIdx) => {
-            if (colIdx > 6) return;
-            const text = td.innerText.trim();
-            if (text.length === 0) return; 
-
-            const isNormal = /^\d{1,2}$/.test(text) && !td.innerHTML.includes('text-shadow');
-
-            if (colIdx === 0 && !tdTemplates.sun) {
-                tdTemplates.sun = td;
-            } else if (colIdx === 6 && !tdTemplates.sat) {
-                tdTemplates.sat = td;
-            } else if (colIdx >= 1 && colIdx <= 5) {
-                if (!tdTemplates.work || (!tdTemplates.work._isNormal && isNormal)) {
-                    tdTemplates.work = td;
-                    tdTemplates.work._isNormal = isNormal;
+    sourceRows.forEach(tableRow => {
+        tableRow.querySelectorAll('td').forEach((cell, columnIndex) => {
+            if (columnIndex > 6) return;
+            const textContent   = cell.textContent.trim();
+            if (!textContent.length) return;
+            const isNormalDate = /^\d{1,2}$/.test(textContent) && !cell.innerHTML.includes('text-shadow');
+            if      (columnIndex === 0 && !cellTemplates.sun) cellTemplates.sun = cell;
+            else if (columnIndex === 6 && !cellTemplates.sat) cellTemplates.sat = cell;
+            else if (columnIndex >= 1 && columnIndex <= 5) {
+                if (!cellTemplates.work || (!cellTemplates.work._isNormal && isNormalDate)) {
+                    cellTemplates.work = cell;
+                    cellTemplates.work._isNormal = isNormalDate;
                 }
             }
         });
     });
 
-    const fallbackTd = tdTemplates.work || tdTemplates.sun || tdTemplates.sat;
-    if (!fallbackTd) return sourceHtml;
+    const fallbackCell = cellTemplates.work || cellTemplates.sun || cellTemplates.sat;
+    if (!fallbackCell) return sourceHtml;
 
-    const lastRowSampleTd = srcRows[srcRows.length - 1]?.querySelector('td');
-    const isOriginalLastRowNoBorder = lastRowSampleTd?.getAttribute('style')?.includes('border-bottom:0px');
+    const lastSourceRowCell = sourceRows[sourceRows.length - 1]?.querySelector('td');
+    const lastRowHasNoBorderBottom = lastSourceRowCell?.getAttribute('style')?.includes('border-bottom:0px');
 
-    function cleanTd(srcTd, isLastWeek) {
+    function buildCleanCell(sourceCell, isLastWeek) {
         let borderBottomOverride = null;
-        if (isLastWeek && isOriginalLastRowNoBorder) {
-            const lastBorders = StyleUtils.parseBorderSides(srcRows[srcRows.length - 1].cells[0]);
-            borderBottomOverride = lastBorders.bottom;
+        if (isLastWeek && lastRowHasNoBorderBottom) {
+            const lastRowBorders = StyleUtils.parseBorderSides(sourceRows[sourceRows.length - 1].cells[0]);
+            borderBottomOverride = lastRowBorders.bottom;
         }
-        return StyleUtils.cloneStructuralTd(srcTd, borderBottomOverride);
+        return StyleUtils.cloneStructuralTd(sourceCell, borderBottomOverride);
     }
 
-    function cloneWrapper(srcWrapper, dateNum) {
-		const newWrapper = srcWrapper.cloneNode(true);
-		const updateText = (node) => {
-			if (node.nodeType === 3 && node.nodeValue.trim().length > 0) {
-				node.nodeValue = String(dateNum);
-			} else {
-				node.childNodes.forEach(child => updateText(child));
-			}
-		};
-		updateText(newWrapper);
-		const linkEl = newWrapper.tagName === 'A' ? newWrapper : newWrapper.querySelector('a');
-		if (linkEl) {
-			const oldHref = linkEl.getAttribute('href') || '';
-		
-			const match = oldHref.match(/#user_content_([^\d]*)(\d+)/);
-
-			if (match) {
-				const userPrefix = match[1];  
-				const oldNumStr = match[2];  
-				
-				const paddingLength = oldNumStr.length;
-				const newNumStr = String(dateNum).padStart(paddingLength, '0');
-
-				linkEl.setAttribute('href', `#user_content_${userPrefix}${newNumStr}`);
-			} else {
-				linkEl.setAttribute('href', `#user_content_d${String(dateNum)}`);
-			}
-		}
-
-		return newWrapper;
-	}
-
-    const newTbody = tbody.cloneNode(false);
-    let dateCounter = 1;
-
-    for (let week = 0; week < 6; week++) {
-        if (dateCounter > lastDate) break;
-        const newTr = document.createElement('tr');
-       
-        const trStyle = srcRows[week % srcRows.length]?.getAttribute('style') || '';
-        if (trStyle) newTr.setAttribute('style', trStyle);
-
-        for (let col = 0; col < 7; col++) {
-            const isLastWeek = dateCounter + (7 - col) > lastDate;
-            const srcTd = col === 0 ? (tdTemplates.sun  || fallbackTd)
-                        : col === 6 ? (tdTemplates.sat  || fallbackTd)
-                        :             (tdTemplates.work || fallbackTd);
-
-            const newTd = cleanTd(srcTd, isLastWeek);
-            const isEmpty = (week === 0 && col < firstDay) || dateCounter > lastDate;
-
-            if (isEmpty) {
-                newTd.innerHTML = '&nbsp;';
+    function cloneContentWrapper(sourceWrapper, dateNumber) {
+        const newWrapper = sourceWrapper.cloneNode(true);
+        const updateTextRecursive = (node) => {
+            if (node.nodeType === 3 && node.nodeValue.trim().length > 0) {
+                node.nodeValue = String(dateNumber);
             } else {
-                const wrapper = srcTd.querySelector('a') || srcTd.querySelector('span') || srcTd.querySelector('p');
-                if (wrapper) {
-                    newTd.appendChild(cloneWrapper(wrapper, dateCounter));
-                } else {
-                    newTd.textContent = String(dateCounter);
-                }
-                dateCounter++;
+                node.childNodes.forEach(child => updateTextRecursive(child));
             }
-            newTr.appendChild(newTd);
+        };
+        updateTextRecursive(newWrapper);
+        const linkElement = newWrapper.tagName === 'A' ? newWrapper : newWrapper.querySelector('a');
+        if (linkElement) {
+            const oldHref  = linkElement.getAttribute('href') || '';
+            const hrefMatch = oldHref.match(/#user_content_([^\d]*)(\d+)/);
+            if (hrefMatch) {
+                const paddingLength = hrefMatch[2].length;
+                const paddedNumber  = String(dateNumber).padStart(paddingLength, '0');
+                linkElement.setAttribute('href', `#${CONSTANTS.USER_CONTENT_PREFIX}${hrefMatch[1]}${paddedNumber}`);
+            } else {
+                linkElement.setAttribute('href', `#${CONSTANTS.USER_CONTENT_PREFIX}d${dateNumber}`);
+            }
         }
-        newTbody.appendChild(newTr);
+        return newWrapper;
+    }
+
+    const newTbody     = tbody.cloneNode(false);
+    let currentDate    = 1;
+
+    for (let weekRow = 0; weekRow < 6; weekRow++) {
+        if (currentDate > lastDateOfMonth) break;
+        const newTableRow = document.createElement('tr');
+        const rowStyleAttr = sourceRows[weekRow % sourceRows.length]?.getAttribute('style') || '';
+        if (rowStyleAttr) newTableRow.setAttribute('style', rowStyleAttr);
+
+        for (let columnIndex = 0; columnIndex < 7; columnIndex++) {
+            const isLastWeek = currentDate + (7 - columnIndex) > lastDateOfMonth;
+            const templateCell  = columnIndex === 0 ? (cellTemplates.sun  || fallbackCell)
+                                : columnIndex === 6 ? (cellTemplates.sat  || fallbackCell)
+                                :                     (cellTemplates.work || fallbackCell);
+            const newCell       = buildCleanCell(templateCell, isLastWeek);
+            const isCellEmpty   = (weekRow === 0 && columnIndex < firstDayOfWeek) || currentDate > lastDateOfMonth;
+
+            if (isCellEmpty) {
+                newCell.innerHTML = '&nbsp;';
+            } else {
+                const contentWrapper = templateCell.querySelector('a') || templateCell.querySelector('span') || templateCell.querySelector('p');
+                if (contentWrapper) newCell.appendChild(cloneContentWrapper(contentWrapper, currentDate));
+                else newCell.textContent = String(currentDate);
+                currentDate++;
+            }
+            newTableRow.appendChild(newCell);
+        }
+        newTbody.appendChild(newTableRow);
     }
 
     table.replaceChild(newTbody, tbody);
     return table.outerHTML;
 }
 
-// ═══════════════════════════════════════════════════════════
-//  줄 확장 (executeExtendRow)
-// ═══════════════════════════════════════════════════════════
-
-function applyCasing(sample, target) {
-    if (!/[a-zA-Z]/.test(sample)) return target;
-    if (sample === sample.toUpperCase()) return target.toUpperCase();
-    if (sample === sample.toLowerCase()) return target.toLowerCase();
-    return target.charAt(0).toUpperCase() + target.slice(1).toLowerCase();
+function applyCasing(sampleText, targetText) {
+    if (!/[a-zA-Z]/.test(sampleText)) return targetText;
+    if (sampleText === sampleText.toUpperCase()) return targetText.toUpperCase();
+    if (sampleText === sampleText.toLowerCase()) return targetText.toLowerCase();
+    return targetText.charAt(0).toUpperCase() + targetText.slice(1).toLowerCase();
 }
 
-function removeRadius(styleStr) {
-    return styleStr
-        .replace(/border-radius\s*:[^;]+;?/gi, '')
-        .replace(/border-top-left-radius\s*:[^;]+;?/gi, '')
-        .replace(/border-top-right-radius\s*:[^;]+;?/gi, '')
-        .replace(/border-bottom-left-radius\s*:[^;]+;?/gi, '')
-        .replace(/border-bottom-right-radius\s*:[^;]+;?/gi, '')
-        .replace(/;+/g, ';').replace(/^;|;$/g, '');
-}
+window.executeExtendRow = function () {
+    const editor  = EditorState.get('editor');
+    const preview = EditorState.get('preview');
+    if (!editor) { window.showToast('에디터가 초기화되지 않았습니다.', 'error'); return; }
 
-function applyBg(styleStr, bg) {
-    if (!bg) return styleStr.replace(/background(?:-color)?\s*:[^;]+;?/gi, '').replace(/^;|;$/g, '');
-    const s = styleStr.replace(/background(?:-color)?\s*:[^;]+;?/gi, '');
-    return (s.replace(/;+$/, '') + `;background-color:${bg}`).replace(/^;/, '');
-}
-
-function parseColorInput(raw) {
-    return (raw || '').split(',').map(s => s.trim()).filter(Boolean);
-}
-
-function getColorForDay(colors, realDayIdx) {
-    const group = DayManager.getGroupType(realDayIdx);
-    if (group === DayManager.DAY_IDX.SUN) return colors[2];
-    if (group === DayManager.DAY_IDX.SAT) return colors[1];
-    return colors[0] || null;
-}
-
-function replaceStyleProp(styleStr, prop, newVal) {
-    const re = new RegExp(`(${prop}\\s*:\\s*)[^;]+`, 'i');
-    if (re.test(styleStr)) return styleStr.replace(re, `$1${newVal}`);
-    return styleStr.trim().replace(/;?$/, '') + `;${prop}:${newVal}`;
-}
-
-function wrapTextNodesWithColor(node, hexColor) {
-    const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT, {
-        acceptNode: (n) => n.nodeValue.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP
-    });
-    const nodes = [];
-    let cur;
-    while ((cur = walker.nextNode())) nodes.push(cur);
-    nodes.forEach(textNode => {
-        const span = document.createElement('span');
-        span.setAttribute('style', `color:${hexColor}`);
-        textNode.parentNode.insertBefore(span, textNode);
-        span.appendChild(textNode);
-    });
-}
-
-function applyColorToDateCell(cell, hexColor) {
-    if (!hexColor) return;
-
-    const tdStyle = cell.getAttribute('style') || '';
-    const hasTdColor = /(?:^|;)\s*color\s*:/i.test(tdStyle);
-
-    if (hasTdColor) {
-        const newStyle = tdStyle.replace(/((?:^|;)\s*color\s*:)[^;]*/i, `$1${hexColor}`);
-        cell.setAttribute('style', newStyle.trim());
+    const rawTemplateTable = SampleCache.getTemplateTable();
+    if (!rawTemplateTable) {
+        window.showToast('샘플 코드가 없습니다. 분석창에서 먼저 설정해 주세요.');
         return;
     }
+    const templateTable = rawTemplateTable.cloneNode(true);
 
-    const colorEls = cell.querySelectorAll('p[style*="color"], span[style*="color"]');
-    if (colorEls.length > 0) {
-        colorEls.forEach(el => {
-            const elStyle = el.getAttribute('style') || '';
-            el.setAttribute('style', replaceStyleProp(elStyle, 'color', hexColor));
-        });
-        return;
-    }
+    let fromDay         = parseInt(document.getElementById('modalExtendFrom').value) || 1;
+    const toDay         = parseInt(document.getElementById('modalExtendTo').value)   || 31;
+    const idSuffix      = (document.getElementById('modalDateId')?.value || '').trim();
+    const colorInputRaw = (document.getElementById('modalTargetAttr').value || '').trim();
+    const baseMonthValue = document.getElementById('modalBaseMonth')?.value;
 
-    wrapTextNodesWithColor(cell, hexColor);
-}
+    const hexColors = StyleUtils.parseColorInput(colorInputRaw)
+    .map(color => ColorManager.toOriginalForm(color))
+    .filter(Boolean);
 
-window.executeExtendRow = function() {
-    const rawTemplate = SampleCache.getTemplateTable();
-    if (!rawTemplate) {
-        window.showToast("샘플 코드가 없습니다. 분석창에서 먼저 설정해주세요.");
-        return;
-    }
-    const templateTable = rawTemplate.cloneNode(true);
+    const sourceThead      = templateTable.querySelector(':scope > thead');
+    const sourceTbody      = TableUtils.getTbody(templateTable);
+    const allTbodyRows     = TableUtils.getRows(sourceTbody);
 
-    let fromDay        = parseInt(document.getElementById('modalExtendFrom').value) || 1;
-    const toDay        = parseInt(document.getElementById('modalExtendTo').value)   || 31;
-    const idSuffix     = (document.getElementById('modalDateId').value || 'd').trim();
-    const colorRaw     = (document.getElementById('modalTargetAttr').value || '').trim();
-    const baseMonthVal = document.getElementById('modalBaseMonth')?.value;
+    const dataStartIndex   = findDataStartIdx(allTbodyRows);
+    const subHeaderRows    = allTbodyRows.slice(0, dataStartIndex);
+    const tbodyDataRows    = allTbodyRows.slice(dataStartIndex);
+    const templateGroups   = getRowGroups(tbodyDataRows);
+    const groupCount       = templateGroups.length;
 
-    const colors = parseColorInput(colorRaw).map(c => ColorManager.toHex(c)).filter(Boolean);
+    const firstSampleDateCell  = templateGroups[0]?.[0]?.cells[0];
+    const sampleDateInfo       = window.parseCellDate(firstSampleDateCell);
+    const sampleDateNumber     = sampleDateInfo ? sampleDateInfo.date : 1;
 
-    const srcThead     = templateTable.querySelector(':scope > thead');
-    const srcTbody     = templateTable.querySelector(':scope > tbody');
-    const allTbodyRows = srcTbody
-        ? Array.from(srcTbody.querySelectorAll(':scope > tr')).filter(r => r.cells.length > 0)
-        : Array.from(templateTable.querySelectorAll('tr')).filter(r => r.cells.length > 0);
+    const sampleCellText = firstSampleDateCell?.textContent || '';
+    let sampleDayIndex   = DayManager.getIdxFromText(sampleCellText);
+    let foundDayLabelList = dayMaps[DayManager.getTypeFromText(sampleCellText)] || null;
 
-    let dataStartIdx = findDataStartIdx(allTbodyRows);
-
-    const subHeaderRows = allTbodyRows.slice(0, dataStartIdx);
-    const tbodyRows = allTbodyRows.slice(dataStartIdx);
-
-    const templateGroups = getRowGroups(tbodyRows);
-    const groupCount     = templateGroups.length;
-
-    const firstSampleDateCell = templateGroups[0]?.[0]?.cells[0];
-    const sampleDateInfo = window.parseCellDate(firstSampleDateCell);
-    const sampleDayNum   = sampleDateInfo ? sampleDateInfo.date : 1;
-
-    const rawText = firstSampleDateCell?.textContent || '';
-	const pureDayText = rawText.replace(/[0-9]/g, '').trim(); 
-
-	let sampleDayIdx = DayManager.getIdxFromText(pureDayText);
-	let foundDayList = dayMaps[DayManager.getTypeFromText(pureDayText)];
-
-    if (sampleDayIdx === -1 && baseMonthVal) {
-        const [bYear, bMonth] = baseMonthVal.split('-').map(Number);
-        const d = new Date(bYear, bMonth - 1, sampleDayNum);
-        if (!isNaN(d.getTime())) { sampleDayIdx = d.getDay(); foundDayList = dayMaps.ko_short; }
+    if (sampleDayIndex === -1 && baseMonthValue) {
+        const [baseYear, baseMonth] = baseMonthValue.split('-').map(Number);
+        const dateObject = new Date(baseYear, baseMonth - 1, sampleDateNumber);
+        if (!isNaN(dateObject.getTime())) { sampleDayIndex = dateObject.getDay(); foundDayLabelList = dayMaps.ko_short; }
     }
 
     let targetTable, targetTbody;
-    const currentContent = editor?.getValue().trim() || '';
+    const currentEditorContent = editor.getValue().trim();
 
-    if (currentContent.includes('<table')) {
-        const currentDoc = DomManager.parse(currentContent);
-        targetTable = currentDoc.querySelector('table');
-        targetTbody = targetTable.querySelector('tbody') || targetTable;
+    if (currentEditorContent.includes('<table')) {
+        const currentDoc = DomManager.parse(currentEditorContent);
+        targetTable  = currentDoc.querySelector('table');
+        targetTbody  = TableUtils.getTbody(targetTable);
 
-        const modalFromRaw = document.getElementById('modalExtendFrom').value.trim();
-        if (!modalFromRaw) {
-            const tbodyEl = targetTable.querySelector('tbody') || targetTable;
-            const allRows = Array.from(tbodyEl.querySelectorAll('tr'));
-            let lastDateNum = 0;
+        const fromDayRawInput = document.getElementById('modalExtendFrom').value.trim();
+        if (!fromDayRawInput) {
+            const allExistingRows = TableUtils.getRows(targetTbody);
+            let lastFoundDateNumber = 0, rowspanRemaining = 0;
 
-            let rowspanRemaining = 0;
-            for (const tr of allRows) {
-                const c0 = tr.cells[0];
-                if (!c0) continue;
-
-                if (rowspanRemaining > 0) {
-                    rowspanRemaining--;
-                    continue;
+            for (const tableRow of allExistingRows) {
+                const firstCell = tableRow.cells[0];
+                if (!firstCell) continue;
+                if (rowspanRemaining > 0) { rowspanRemaining--; continue; }
+                const rowspan = parseInt(firstCell.getAttribute('rowspan') || '1');
+                if (TableUtils.isDateCell(firstCell)) {
+                    const numberMatch = firstCell.textContent.trim().match(/(\d{1,2})/);
+                    const dateNum = numberMatch ? parseInt(numberMatch[1]) : 0;
+                    if (dateNum > lastFoundDateNumber) lastFoundDateNumber = dateNum;
                 }
-
-                const rs     = parseInt(c0.getAttribute('rowspan') || '1');
-                const hasId  = c0.id && c0.id.includes('user_content_');
-                const txt    = c0.textContent.trim();
-                const numMatch = txt.match(/(\d{1,2})/); 
-
-                if (hasId || numMatch) {
-                    const n = numMatch ? parseInt(numMatch[1]) : 0;
-                    if (n > lastDateNum) lastDateNum = n;
-                }
-
-                if (rs > 1) rowspanRemaining = rs - 1;
+                if (rowspan > 1) rowspanRemaining = rowspan - 1;
             }
-            if (lastDateNum > 0) fromDay = lastDateNum + 1;
+            if (lastFoundDateNumber > 0) fromDay = lastFoundDateNumber + 1;
         }
     } else {
         targetTable = templateTable;
-        targetTbody = targetTable.querySelector('tbody') || targetTable;
+        targetTbody = TableUtils.getTbody(targetTable);
         targetTbody.innerHTML = '';
-        if (srcThead && !targetTable.querySelector('thead')) {
-            targetTable.insertBefore(srcThead.cloneNode(true), targetTable.firstChild);
+        if (sourceThead && !targetTable.querySelector('thead')) {
+            targetTable.insertBefore(sourceThead.cloneNode(true), targetTable.firstChild);
         }
-        subHeaderRows.forEach(r => targetTbody.appendChild(r.cloneNode(true)));
+        subHeaderRows.forEach(row => targetTbody.appendChild(row.cloneNode(true)));
     }
 
-    if (fromDay > toDay)  { window.showToast('시작일이 종료일보다 클 수 없습니다.'); return; }
-    if (fromDay > 31)     { window.showToast('31일을 초과할 수 없습니다.'); return; }
+    if (fromDay > toDay) { window.showToast('시작일이 종료일보다 클 수 없습니다.'); return; }
+    if (fromDay > 31)    { window.showToast('31일을 초과할 수 없습니다.'); return; }
 
     const allDayPatterns = DayManager.getAllPatterns();
-    const fragment = document.createDocumentFragment();
+    const rowFragment    = document.createDocumentFragment();
 
-    for (let d = fromDay; d <= Math.min(toDay, 31); d++) {
-        const groupIdx    = (d - 1) % groupCount;
-        const targetGroup = templateGroups[groupIdx];
-        const firstRow    = targetGroup[0];
-        const lastRow     = targetGroup.at(-1);
-        const isMultiRow  = targetGroup.length > 1;
+    const updateDateNodeRecursive = (parentNode, targetDateNumber, targetDayName) => {
+        parentNode.childNodes.forEach(childNode => {
+            if (childNode.nodeType === 3) {
+                let textContent = childNode.nodeValue;
+                if (/\d+/.test(textContent)) textContent = textContent.replace(/\d+/, targetDateNumber);
+                if (targetDayName) {
+                    for (const pattern of allDayPatterns) {
+                        const patternRegex = new RegExp(pattern, 'gi');
+                        if (patternRegex.test(textContent)) { textContent = textContent.replace(patternRegex, targetDayName); break; }
+                    }
+                }
+                childNode.nodeValue = textContent;
+            } else if (childNode.nodeType === 1) {
+                updateDateNodeRecursive(childNode, targetDateNumber, targetDayName);
+            }
+        });
+    };
+
+    for (let dayNumber = fromDay; dayNumber <= Math.min(toDay, 31); dayNumber++) {
+        const groupIndex    = (dayNumber - 1) % groupCount;
+        const currentGroup  = templateGroups[groupIndex];
+        const firstGroupRow = currentGroup[0];
+        const lastGroupRow  = currentGroup.at(-1);
+        const isMultiRow    = currentGroup.length > 1;
 
         const newRow = document.createElement('tr');
-        Array.from(firstRow.attributes).forEach(attr => {
-            let val = attr.value;
-            if (attr.name === 'style') val = StyleUtils.hexStyle(val);
-            newRow.setAttribute(attr.name, val);
+        Array.from(firstGroupRow.attributes).forEach(attribute => {
+            newRow.setAttribute(attribute.name, attribute.name === 'style' ? StyleUtils.hexStyle(attribute.value) : attribute.value);
         });
 
         if (isMultiRow) {
-            const firstTrStyle = firstRow.getAttribute('style') || '';
-            const lastTrStyle  = lastRow.getAttribute('style') || '';
-            const allTrStyles  = targetGroup.map(r => r.getAttribute('style') || '').join(';');
-
-            const solidMatch  = allTrStyles.match(/border-bottom\s*:\s*[^;]*solid[^;]*/i);
-            const lastMatch   = lastTrStyle.match(/border-bottom\s*:[^;]+/i);
-            const finalBorder = solidMatch?.[0] || lastMatch?.[0];
-
-            if (finalBorder) {
-                let curStyle = newRow.getAttribute('style') || '';
-                if (/border-bottom/i.test(curStyle)) {
-                    curStyle = curStyle.replace(/border-bottom\s*:[^;]+/i, finalBorder);
-                } else {
-                    curStyle = (curStyle + ';' + finalBorder).replace(/^;+/, '');
-                }
-                newRow.setAttribute('style', StyleUtils.hexStyle(curStyle));
+            const bottomBorder = StyleUtils.extractBottomBorder(currentGroup);
+            if (bottomBorder) {
+                let currentRowStyle = newRow.getAttribute('style') || '';
+                currentRowStyle = StyleUtils.applyBottomBorder(currentRowStyle, bottomBorder);
+                newRow.setAttribute('style', StyleUtils.hexStyle(currentRowStyle));
             }
         }
 
-        const currentDayIdx = sampleDayIdx !== -1
-            ? (sampleDayIdx + (d - sampleDayNum) % 7 + 7) % 7
+        const currentDayIndex = sampleDayIndex !== -1
+            ? (sampleDayIndex + (dayNumber - sampleDateNumber) % 7 + 7) % 7
             : null;
-        const cellColor = (colors.length > 0 && currentDayIdx !== null)
-            ? getColorForDay(colors, currentDayIdx)
+        const cellColor = (hexColors.length > 0 && currentDayIndex !== null)
+            ? StyleUtils.getColorForDay(hexColors, currentDayIndex)
             : null;
 
-        Array.from(firstRow.cells).forEach((templateCell, cellIdx) => {
-            const newCell = templateCell.cloneNode(true);
-            newCell.removeAttribute('rowspan'); 
-            if (newCell.getAttribute('style')) {
-                newCell.setAttribute('style', StyleUtils.hexStyle(newCell.getAttribute('style')));
-            }
-
-            if (cellIdx === 0) {
-                const sampleId   = templateCell.id || '';
-                const idInputVal = (document.getElementById('modalDateId')?.value || '').trim();
-                const idNumMatch = sampleId.match(/\d+$/);
-                const idPadding  = (idNumMatch?.[0]?.startsWith('0')) ? idNumMatch[0].length : 0;
-
-                const sampleCellText = firstSampleDateCell?.textContent?.trim() || '';
-                const hasLeadZero    = /^0\d/.test(sampleCellText);
-                const targetDayNum   = hasLeadZero ? String(d).padStart(2, '0') : String(d);
-
-                let targetDayName = '';
-                if (foundDayList && currentDayIdx !== null) {
-                    const raw     = foundDayList[currentDayIdx];
-                    const matched = firstSampleDateCell.textContent.match(
-                        new RegExp(foundDayList[sampleDayIdx], 'gi')
-                    );
-                    targetDayName = matched ? applyCasing(matched[0], raw) : raw;
-                }
-
-                const updateNode = (parentNode) => {
-                    parentNode.childNodes.forEach(node => {
-                        if (node.nodeType === 3) {
-                            let text = node.nodeValue;
-                            if (/\d+/.test(text)) text = text.replace(/\d+/, targetDayNum);
-                            if (targetDayName) {
-                                for (const pat of allDayPatterns) {
-                                    const reg = new RegExp(pat, 'gi');
-                                    if (reg.test(text)) { text = text.replace(reg, targetDayName); break; }
-                                }
-                            }
-                            node.nodeValue = text;
-                        } else if (node.nodeType === 1) {
-                            updateNode(node);
-                        }
-                    });
-                };
-                updateNode(newCell);
-
-                let finalIdValue = '';
-                if (sampleId) {
-                    const idBase      = sampleId.replace(/\d+$/, '');
-                    const finalNumStr = idPadding > 0 ? String(d).padStart(idPadding, '0') : String(d);
-                    finalIdValue = `${idBase}${finalNumStr}`;
-                } else if (idInputVal) {
-                    finalIdValue = `user_content_${idInputVal}${d}`;
-                }
-                if (finalIdValue) newCell.id = finalIdValue;
-                else newCell.removeAttribute('id');
-
-                if (cellColor) applyColorToDateCell(newCell, cellColor);
+        Array.from(firstGroupRow.cells).forEach((templateCell, cellIndex) => {
+            let newCell;
+            if (cellIndex === 0) {
+                newCell = templateCell.cloneNode(true);
+                newCell.removeAttribute('rowspan');
 
                 if (isMultiRow) {
-                    const lastDateCell = lastRow.cells[0];
-                    if (lastDateCell) {
-                        const lastCellStyle = lastDateCell.getAttribute('style') || '';
-                        const lastBorderMatch = lastCellStyle.match(/border-bottom\s*:[^;]+/i);
-                        if (lastBorderMatch) {
-                            let cs = newCell.getAttribute('style') || '';
-                            if (/border-bottom/i.test(cs)) {
-                                cs = cs.replace(/border-bottom\s*:[^;]+/i, lastBorderMatch[0]);
-                            } else {
-                                cs = (cs + ';' + lastBorderMatch[0]).replace(/^;+/, '');
-                            }
-                            newCell.setAttribute('style', StyleUtils.hexStyle(cs));
-                        }
+                    const lastRowCellBorderMatch = lastGroupRow.cells[0]?.getAttribute('style')?.match(/border-bottom\s*:[^;]+/i);
+                    if (lastRowCellBorderMatch) {
+                        let cellStyleString = newCell.getAttribute('style') || '';
+                        cellStyleString = StyleUtils.applyBottomBorder(cellStyleString, lastRowCellBorderMatch[0]);
+                        newCell.setAttribute('style', StyleUtils.hexStyle(cellStyleString));
                     }
                 }
 
+                const sampleCellTextContent = firstSampleDateCell?.textContent?.trim() || '';
+                const paddedDateNumber = DateUtils.padNumberToMatch(dayNumber, sampleCellTextContent);
+
+                let targetDayName = '';
+                if (foundDayLabelList && currentDayIndex !== null) {
+                    const dayLabelRaw = foundDayLabelList[currentDayIndex];
+                    const sampleLabelMatches = firstSampleDateCell.textContent.match(
+                        new RegExp(foundDayLabelList[sampleDayIndex], 'gi')
+                    );
+                    targetDayName = sampleLabelMatches ? applyCasing(sampleLabelMatches[0], dayLabelRaw) : dayLabelRaw;
+                }
+                updateDateNodeRecursive(newCell, paddedDateNumber, targetDayName);
+
+                const generatedCellId = DateUtils.generateCellId(templateCell.id || '', dayNumber, sampleCellTextContent, idSuffix);
+                if (generatedCellId) newCell.id = generatedCellId;
+                else                 newCell.removeAttribute('id');
+
+                if (cellColor) StyleUtils.applyColorToDateCell(newCell, cellColor);
+                if (newCell.getAttribute('style')) {
+                    newCell.setAttribute('style', StyleUtils.hexStyle(newCell.getAttribute('style')));
+                }
             } else {
-                const firstRowCell = targetGroup[0].cells[cellIdx];
-                const lastRowCell  = isMultiRow
-                    ? (lastRow.cells[cellIdx - 1] ?? firstRowCell)
-                    : firstRowCell;
-                StyleUtils.applyCellStyle(newCell, firstRowCell, lastRowCell);
+                const firstGroupCell = currentGroup[0].cells[cellIndex];
+                const lastGroupCell  = isMultiRow ? (lastGroupRow.cells[cellIndex - 1] ?? firstGroupCell) : firstGroupCell;
+                newCell = TableUtils.createEmptyCell(templateCell, null);
+                StyleUtils.applyCellStyle(newCell, firstGroupCell, lastGroupCell);
                 if (newCell.getAttribute('style')) {
                     newCell.setAttribute('style', StyleUtils.hexStyle(newCell.getAttribute('style')));
                 }
@@ -1292,206 +1323,181 @@ window.executeExtendRow = function() {
             }
             newRow.appendChild(newCell);
         });
-
-        fragment.appendChild(newRow);
+        rowFragment.appendChild(newRow);
     }
+    targetTbody.appendChild(rowFragment);
 
-    targetTbody.appendChild(fragment);
+    const allResultRows      = TableUtils.getRows(targetTbody);
+    const resultDataStartIdx = findDataStartIdx(allResultRows);
+    const firstResultDateNumber = parseInt(
+        allResultRows[resultDataStartIdx]?.cells[0]?.textContent?.trim()?.match(/\d+/)?.[0] || '0'
+    );
+    const shouldLockHeader = (firstResultDateNumber !== 1);
 
-    const shouldLockHeader = (fromDay !== 1);
     window.syncTableToEditor(targetTable, shouldLockHeader);
     if (!shouldLockHeader) window.releaseHeaderLock();
 
     setTimeout(() => {
         const previewTable = preview.querySelector('table');
         if (!previewTable) return;
-        const previewTbody = previewTable.querySelector('tbody') || previewTable;
-        const previewRows  = Array.from(previewTbody.querySelectorAll('tr'));
-        const allDateTds   = previewRows
-            .map(tr => tr.cells[0])
-            .filter(td => td && (
-                parseInt(td.getAttribute('rowspan') || '1') >= 2 ||
-                (td.id && td.id.includes('user_content_')) ||
-                /^\d/.test(td.textContent.trim())
-            ));
-        const targetTd = allDateTds[allDateTds.length - (toDay - fromDay + 1)] || allDateTds.at(-1);
-        focusCellInPreview(targetTd);
-    }, 80);
+        const previewRows = TableUtils.getRows(TableUtils.getTbody(previewTable));
+        const allDateCells = previewRows
+            .map(tableRow => tableRow.cells[0])
+            .filter(cell => TableUtils.isDateCell(cell));
+        const focusTargetCell = allDateCells[allDateCells.length - (toDay - fromDay + 1)] || allDateCells.at(-1);
+        focusCellInPreview(focusTargetCell);
+    }, CONSTANTS.PREVIEW_SYNC_DELAY);
 };
 
-// ═══════════════════════════════════════════════════════════
-//  칸 분할 (splitCurrentRow)
-// ═══════════════════════════════════════════════════════════
-window.splitCurrentRow = function() {
-    const sel = window.getSelection();
-    let targetTd = sel?.anchorNode?.parentElement?.closest('td');
+function insertEmptyRowAfter(referenceRow, templateRow, templateCells, hexBackground) {
+    const newRow = templateRow.cloneNode(false);
+    StyleUtils.applyRowTrStyle(newRow, templateRow, hexBackground);
+    templateCells.forEach(templateCell => {
+        const newCell = templateCell.cloneNode(false);
+        let styleString = StyleUtils.removeRadius(StyleUtils.hexStyle(templateCell.getAttribute('style') || ''));      
+        newCell.setAttribute('style', StyleUtils.hexStyle(StyleUtils.applyBg(styleString, hexBackground)));
+        newCell.innerHTML = '&nbsp;';
+        newRow.appendChild(newCell);
+    });
+    referenceRow.parentNode.insertBefore(newRow, referenceRow.nextSibling);
+    return newRow;
+}
 
-    if (!targetTd) {
-        const ae = document.activeElement;
-        targetTd = ae?.closest('#previewArea td') || (ae?.tagName === 'TD' ? ae : null);
+function resolveTargetCell(previewArea) {
+    const selection = window.getSelection();
+    if (selection?.anchorNode) {
+        const cell = getResolvedNode(selection.anchorNode).closest('td');
+        if (cell) return cell;
     }
+    const active = document.activeElement;
+    const fromActive = active?.closest('#previewArea td') 
+                    || (active?.tagName === 'TD' ? active : null);
+    if (fromActive) return fromActive;
 
-    if (!targetTd && savedRange) {
-        const node = savedRange.startContainer;
-        const el = node?.nodeType === 3 ? node.parentElement : node;
-        targetTd = el?.closest('#previewArea td') || null;
+    if (EditorState.get('savedRange')) {
+        const cell = getResolvedNode(EditorState.get('savedRange').startContainer)
+                        ?.closest('#previewArea td');
+        if (cell) return cell;
     }
-    if (!targetTd && currentTargetNode) {
-        targetTd = currentTargetNode.closest?.('td') || null;
-        if (targetTd && !document.getElementById('previewArea').contains(targetTd)) {
-            targetTd = null;
-        }
-    }
+    const candidate = EditorState.currentTargetNode?.closest?.('td');
+    if (candidate && previewArea.contains(candidate)) return candidate;
+    return null;
+}
 
-    if (!targetTd || !document.getElementById('previewArea').contains(targetTd)) {
+window.splitCurrentRow = function () {
+    const preview = EditorState.get('preview');
+	const previewArea = document.getElementById('previewArea');
+	const targetCell = resolveTargetCell(previewArea);
+	if (!targetCell) {
         return window.showToast('분할할 칸을 선택해주세요.');
     }
+    const currentTableRow = targetCell.closest('tr');
+    const table           = TableUtils.getTable(currentTableRow);
+    if (!table) return window.showToast('테이블을 찾을 수 없습니다.');
 
-    const currentTr   = targetTd.closest('tr');
-    const table       = currentTr.closest('table');
-    const targetTbody = table.querySelector('tbody') || table;
-    const tbodyRows   = Array.from(targetTbody.querySelectorAll('tr'));
-    const currentRowIdx = tbodyRows.indexOf(currentTr);
+    const targetTbody   = TableUtils.getTbody(table);
+    const tbodyRows     = TableUtils.getRows(targetTbody);
+    const currentRowIndex = tbodyRows.indexOf(currentTableRow);
 
     const templateTable = SampleCache.getTemplateTable();
-    if (!templateTable) return window.showToast('샘플 코드가 없습니다.');
+    if (!templateTable) return window.showToast('샘플코드가 없습니다.');
 
-    const allTRows = Array.from(templateTable.querySelectorAll('tbody tr')).filter(tr => tr.cells.length > 0);
-    const tRows = allTRows.slice(findDataStartIdx(allTRows));
-    const sampleGroups = getRowGroups(tRows);
-    const refGroup = sampleGroups.find(g => g.length >= 2) || sampleGroups[0];
-    const s1 = refGroup[0];
-    const sn = refGroup.at(-1);
-    const sampleIsMulti = refGroup.length > 1;
-    let dateTd = null, startIdx = -1;
-    for (let i = currentRowIdx; i >= 0; i--) {
-        const firstCell = tbodyRows[i].cells[0];
-        if (!firstCell) continue;
-        const span    = parseInt(firstCell.getAttribute('rowspan')) || 1;
-        const dateInfo = window.parseCellDate(firstCell);
-        if (i + span > currentRowIdx && (span > 1 || firstCell.id?.includes('user_content_') || dateInfo)) {
-            dateTd = firstCell; startIdx = i; break;
+    const allTemplateRows = Array.from(templateTable.querySelectorAll(':scope > tbody > tr')).filter(row => row.cells.length > 0);
+    const templateDataRows = allTemplateRows.slice(findDataStartIdx(allTemplateRows));
+    const sampleGroups     = getRowGroups(templateDataRows);
+    const referenceGroup   = sampleGroups.find(group => group.length >= 2) || sampleGroups[0];
+    const firstSampleRow   = referenceGroup[0];    
+    const lastSampleRow    = referenceGroup.at(-1);   
+    const middleSampleRow  = referenceGroup.length > 2 ? referenceGroup[1] : firstSampleRow;  
+    const sampleIsMultiRow = referenceGroup.length > 1;
+
+    let dateCellElement = null, dateRowStartIndex = -1;
+    for (let rowIndex = currentRowIndex; rowIndex >= 0; rowIndex--) {
+        const cell = tbodyRows[rowIndex].cells[0];
+        if (!cell) continue;
+        const rowspan  = parseInt(cell.getAttribute('rowspan')) || 1;
+        const hasIdPrefix = cell.id?.includes(CONSTANTS.USER_CONTENT_PREFIX);
+        const hasRowspan  = rowspan >= 2;
+        const hasNumber   = /\d/.test(cell.textContent.trim());
+
+        if (rowIndex === currentRowIndex) {
+            if (hasIdPrefix || hasRowspan || hasNumber) { 
+                dateCellElement  = cell;
+                dateRowStartIndex = rowIndex;
+                break;
+            }
+        } else {
+            if (rowspan < 2 || rowIndex + rowspan <= currentRowIndex) continue;
+            if (hasIdPrefix || hasRowspan || hasNumber) {
+                dateCellElement  = cell;
+                dateRowStartIndex = rowIndex;
+                break;
+            }
         }
     }
-    if (!dateTd) {
-        const fc = tbodyRows[currentRowIdx]?.cells[0];
-        if (fc) { dateTd = fc; startIdx = currentRowIdx; }
-    }
-    if (!dateTd) return window.showToast('날짜 칸을 찾을 수 없습니다.');
-
-    const currentSpan = parseInt(dateTd.getAttribute('rowspan')) || 1;
-    const groupLastIdx = startIdx + currentSpan - 1; 
-    const isFirstRow   = currentRowIdx === startIdx;
-    const isLastRow    = currentRowIdx === groupLastIdx;
-
-    const firstRowStyleAttr = tbodyRows[startIdx]?.getAttribute('style') || '';
-    const bgMatch = firstRowStyleAttr.match(/background(?:-color)?\s*:\s*([^;]+)/i);
-    const rawBg   = bgMatch ? bgMatch[1].trim() : '';
-    const hexBg   = rawBg ? (ColorManager.toHex(rawBg) || rawBg) : '';
-
-    if (currentSpan === 1) {
-        dateTd.setAttribute('rowspan', '2');
-
-        const s1TrStyle = StyleUtils.hexStyle(s1.closest('tr')?.getAttribute('style') || '');
-        currentTr.setAttribute('style', StyleUtils.hexStyle(applyBg(s1TrStyle, hexBg)));
-
-        Array.from(currentTr.cells).forEach((cell, cIdx) => {
-            if (cIdx === 0) return; 
-            const s1Cell = s1.cells[cIdx];
-            if (!s1Cell) return;
-            let st = StyleUtils.hexStyle(s1Cell.getAttribute('style') || '');
-            cell.setAttribute('style', StyleUtils.hexStyle(applyBg(st, hexBg)));
-        });
-        const newTr = sn.closest('tr')?.cloneNode(false) || document.createElement('tr');
-        let snTrStyle = StyleUtils.hexStyle(sn.closest('tr')?.getAttribute('style') || '');
-        newTr.setAttribute('style', StyleUtils.hexStyle(applyBg(snTrStyle, hexBg)));
-
-        const snCells = sampleIsMulti ? Array.from(sn.cells) : Array.from(s1.cells).slice(1);
-        snCells.forEach(srcCell => {
-            const td = srcCell.cloneNode(false);
-            let st = StyleUtils.hexStyle(srcCell.getAttribute('style') || '');
-            td.setAttribute('style', StyleUtils.hexStyle(applyBg(st, hexBg)));
-            td.innerHTML = '&nbsp;';
-            newTr.appendChild(td);
-        });
-        currentTr.parentNode.insertBefore(newTr, currentTr.nextSibling);
-    }
-
-    else if (isLastRow) {
-        dateTd.setAttribute('rowspan', currentSpan + 1);
-		
-		const middleSample = refGroup.length > 2 ? refGroup[1] : s1;
-		const middleStyle = StyleUtils.hexStyle(middleSample.closest('tr')?.getAttribute('style') || '');
-		currentTr.setAttribute('style', StyleUtils.hexStyle(applyBg(middleStyle, hexBg)));
-		
-        Array.from(currentTr.cells).forEach((cell, cIdx) => {
-			const isFirstRowOfGroup = (currentTr === tbodyRows[startIdx]);
-			
-			const visualColumnIdx = isFirstRowOfGroup ? cIdx : cIdx + 1;
-
-			const sampleCell = middleSample.cells[visualColumnIdx];
-			
-			if (sampleCell) {
-				let st = StyleUtils.hexStyle(sampleCell.getAttribute('style') || '');
-				st = removeRadius(st);
-				cell.setAttribute('style', StyleUtils.hexStyle(applyBg(st, hexBg)));
-			}
-		});
-
-        const newTr = document.createElement('tr');
-        let snTrStyle = StyleUtils.hexStyle(sn.closest('tr')?.getAttribute('style') || '');
-        newTr.setAttribute('style', StyleUtils.hexStyle(applyBg(snTrStyle, hexBg)));
-
-        const snCells = sampleIsMulti ? Array.from(sn.cells) : Array.from(s1.cells).slice(1);
-        snCells.forEach(srcCell => {
-            const td = srcCell.cloneNode(false);
-            let st = StyleUtils.hexStyle(srcCell.getAttribute('style') || '');
-            td.setAttribute('style', StyleUtils.hexStyle(applyBg(st, hexBg)));
-            td.innerHTML = '&nbsp;';
-            newTr.appendChild(td);
-        });
-        currentTr.parentNode.insertBefore(newTr, currentTr.nextSibling);
-    }
-
-    else {
-        dateTd.setAttribute('rowspan', currentSpan + 1);
-        const newTr = currentTr.cloneNode(false);
-        let trStyle = StyleUtils.hexStyle(currentTr.getAttribute('style') || '');
-        newTr.setAttribute('style', StyleUtils.hexStyle(applyBg(trStyle, hexBg)));
-
-        const cellsToClone = isFirstRow
-            ? Array.from(currentTr.cells).slice(1) 
-            : Array.from(currentTr.cells);   
-        cellsToClone.forEach(srcCell => {
-            const td = srcCell.cloneNode(false);
-            let st = StyleUtils.hexStyle(srcCell.getAttribute('style') || '');
-            st = removeRadius(st);
-            td.setAttribute('style', StyleUtils.hexStyle(applyBg(st, hexBg)));
-            td.innerHTML = '&nbsp;';
-            newTr.appendChild(td);
-        });
-        currentTr.parentNode.insertBefore(newTr, currentTr.nextSibling);
-
-        if (isFirstRow) {
-            Array.from(currentTr.cells).slice(1).forEach(cell => {
-                let st = StyleUtils.hexStyle(cell.getAttribute('style') || '');
-                st = st.replace(/border-bottom-right-radius\s*:[^;]+;?/gi, '')
-                       .replace(/border-bottom-left-radius\s*:[^;]+;?/gi, '')
-                       .replace(/;+/g, ';').replace(/^;|;$/g, '');
-                cell.setAttribute('style', StyleUtils.hexStyle(applyBg(st, hexBg)));
-            });
+    if (!dateCellElement) {
+        const firstCellOfCurrentRow = tbodyRows[currentRowIndex]?.cells[0];
+        if (firstCellOfCurrentRow) { 
+            dateCellElement   = firstCellOfCurrentRow; 
+            dateRowStartIndex = currentRowIndex; 
         }
+    }
+    if (!dateCellElement) return window.showToast('날짜 칸을 찾을 수 없습니다.');
+
+    const currentRowspan   = parseInt(dateCellElement.getAttribute('rowspan')) || 1;
+    const groupLastRowIndex = dateRowStartIndex + currentRowspan - 1;
+    const isFirstRowInGroup = currentRowIndex === dateRowStartIndex;
+    const isLastRowInGroup  = currentRowIndex === groupLastRowIndex;
+
+    const hexBackground = StyleUtils.extractBgColor(tbodyRows[dateRowStartIndex]);
+
+    if (currentRowspan === 1) {
+        dateCellElement.setAttribute('rowspan', '2');
+        StyleUtils.applyRowTrStyle(currentTableRow, firstSampleRow, hexBackground);
+        Array.from(currentTableRow.cells).forEach((cell, cellIndex) => {
+            if (cellIndex === 0) return;
+            const templateCell = firstSampleRow.cells[cellIndex];
+            if (!templateCell) return;
+            cell.setAttribute('style', StyleUtils.hexStyle(StyleUtils.applyBg(StyleUtils.hexStyle(templateCell.getAttribute('style') || ''), hexBackground)));
+        });
+        const lastSampleCells = sampleIsMultiRow ? Array.from(lastSampleRow.cells) : Array.from(firstSampleRow.cells).slice(1);
+		insertEmptyRowAfter(currentTableRow, lastSampleRow, lastSampleCells, hexBackground);
+
+    } else if (isLastRowInGroup) {
+        dateCellElement.setAttribute('rowspan', currentRowspan + 1);
+        StyleUtils.applyRowTrStyle(currentTableRow, middleSampleRow, hexBackground);
+        Array.from(currentTableRow.cells).forEach((cell, cellIndex) => {
+            const isFirstRowOfGroup   = (currentTableRow === tbodyRows[dateRowStartIndex]);
+            const visualColumnIndex   = isFirstRowOfGroup ? cellIndex : cellIndex + 1;
+            const templateCell        = middleSampleRow.cells[visualColumnIndex];
+            if (templateCell) {
+                let styleString = StyleUtils.removeRadius(StyleUtils.hexStyle(templateCell.getAttribute('style') || ''));
+                cell.setAttribute('style', StyleUtils.hexStyle(StyleUtils.applyBg(styleString, hexBackground)));
+            }
+        });
+        const lastSampleCells = sampleIsMultiRow ? Array.from(lastSampleRow.cells) : Array.from(firstSampleRow.cells).slice(1);
+        insertEmptyRowAfter(currentTableRow, lastSampleRow, lastSampleCells, hexBackground);
+
+    } else {
+        dateCellElement.setAttribute('rowspan', currentRowspan + 1);
+        const cellsToClone = isFirstRowInGroup ? Array.from(currentTableRow.cells).slice(1) : Array.from(currentTableRow.cells);
+        insertEmptyRowAfter(currentTableRow, currentTableRow, cellsToClone, hexBackground);
+        if (isFirstRowInGroup) {
+			StyleUtils.applyRowCellStyles(currentTableRow, currentTableRow, hexBackground, { 
+				radiusMode: 'bottom', 
+				skipFirstCell: true 
+			});
+		}
     }
 
     window.syncTableToEditor(table);
 
     setTimeout(() => {
-        const previewTable = preview.querySelector('table');
+        const previewTable = TableUtils.getTable(preview.querySelector('table'));
         if (!previewTable) return;
-        const previewTbody = previewTable.querySelector('tbody') || previewTable;
-        const previewRows  = Array.from(previewTbody.querySelectorAll('tr'));
-        const newRowInPreview = previewRows[currentRowIdx + 1];
+        const previewRows      = TableUtils.getRows(TableUtils.getTbody(previewTable));
+        const newRowInPreview  = previewRows[currentRowIndex + 1];
         if (!newRowInPreview) return;
         focusCellInPreview(newRowInPreview.cells[0]);
-    }, 80);
+    }, CONSTANTS.PREVIEW_SYNC_DELAY);
 };
