@@ -1,96 +1,335 @@
 /**
- * editor-tools.js
+ * editor-tools.js 
  */
 
-function normalizeColor(color) {
-    return ColorManager.toHex(color);
-}
-
 const SEMANTIC_TAG_MAP = {
-    fontWeight:     { tag: 'strong', check: v => v === 'bold' || parseInt(v) >= 700 },
-    fontStyle:      { tag: 'em',     check: v => v === 'italic' },
-    textDecorationUnderline: { tag: 'u', check: v => v && v.includes('underline') },
-    textDecorationLineThrough: { tag: 's', check: v => v && v.includes('line-through') },
+    bold:      'strong',
+    italic:    'em',
+    underline: 'u',
+    strike:    's',
 };
 
-function buildCharMap(pEl) {
-    const charMap = [];
-    function collectStyles(el) {
-        const s = el.style;
-        const r = {};
-        if (s.fontWeight)      r.fontWeight      = s.fontWeight;
-        if (s.fontStyle)       r.fontStyle       = s.fontStyle;
-        if (s.textDecoration)  r.textDecoration  = s.textDecoration;
-        if (s.color)           r.color           = normalizeColor(s.color);
-        if (s.backgroundColor) r.backgroundColor = normalizeColor(s.backgroundColor);
-        if (s.fontFamily)      r.fontFamily      = s.fontFamily;
-        if (s.fontSize)        r.fontSize        = s.fontSize;
-        const tag = el.tagName?.toUpperCase();
-        if (tag === 'STRONG' && !r.fontWeight)     r.fontWeight = 'bold';
-        if (tag === 'EM'     && !r.fontStyle)      r.fontStyle  = 'italic';
-        if (tag === 'U'      && !r.textDecoration) r.textDecoration = 'underline';
-        if (tag === 'S'      && !r.textDecoration) r.textDecoration = 'line-through';
-        return r;
-    }
-    function walk(node, inherited) {
-        if (node.nodeType === 3) {
-            for (const ch of node.textContent) {
-                charMap.push({ char: ch, styles: Object.assign({}, inherited) });
-            }
-        } else if (node.nodeType === 1) {
-            if (node.tagName === 'BR') {
-                charMap.push({ char: '\n', isBr: true, styles: Object.assign({}, inherited) });
-                return;
-            }
-            let own = {};
-            if (['SPAN','STRONG','EM','U','S'].includes(node.tagName)) own = collectStyles(node);
-            for (const child of node.childNodes) walk(child, Object.assign({}, inherited, own));
+const styleMap = {
+    font:      { key: 'fontFamily',      val: (value) => value,                    css: (value) => `font-family:${ColorManager.normFont(value)};` },
+    size:      { key: 'fontSize',        val: (value) => value,                    css: (value) => `font-size:${value};` },
+    bold:      { tag: SEMANTIC_TAG_MAP.bold,      key: 'fontWeight',     val: () => STYLE_VALUES.BOLD },
+    italic:    { tag: SEMANTIC_TAG_MAP.italic,    key: 'fontStyle',      val: () => STYLE_VALUES.ITALIC },
+    underline: { tag: SEMANTIC_TAG_MAP.underline, key: 'textDecoration', val: () => STYLE_VALUES.UNDERLINE },
+    strike:    { tag: SEMANTIC_TAG_MAP.strike,    key: 'textDecoration', val: () => STYLE_VALUES.STRIKE },
+    align:     { key: 'textAlign',       val: (value) => value,                    css: (value) => `text-align:${value};` },
+    text: { key: 'color', val: (value) => ColorManager.toOriginalForm(value), css: (value) => `color:${ColorManager.toOriginalForm(value)};` },
+    bg: { key: 'backgroundColor', val: (value) => ColorManager.toOriginalForm(value), css: (value) => `background-color:${ColorManager.toOriginalForm(value)};` }
+};
+
+const STYLE_VALUES = {
+    BOLD: 'bold',
+    BOLD_NUM: 700,
+    ITALIC: 'italic',
+    UNDERLINE: 'underline',
+    STRIKE: 'line-through'
+};
+
+const _debounceTimers = {
+    font: null,
+    size: null,
+};
+
+const TextFormatTools = {
+    styleKey(styles) {
+        if (!styles) return '';
+        return Object.entries(styles)
+            .sort((a, b) => a[0].localeCompare(b[0]))
+            .map(([p, v]) => `${p}:${v}`)
+            .join(';');
+    },
+    mergeDecorations: (inheritedValue, ownValue) => {
+        const allParts = new Set([
+            ...(inheritedValue || '').split(/\s+/), 
+            ...(ownValue || '').split(/\s+/)
+        ].filter(Boolean));
+        return [...allParts].join(' ');
+    },    
+    toggleDecoration: (currentValue, targetDecoration, isActive) => {
+        const parts = (currentValue || '').split(/\s+/).filter(Boolean);
+        if (isActive) {
+            return parts.filter(part => part !== targetDecoration).join(' ');
+        } else {
+            if (!parts.includes(targetDecoration)) parts.push(targetDecoration);
+            return parts.join(' ');
         }
     }
-    walk(pEl, collectStyles(pEl));
+};
+
+const TextEditor = {
+    changeFontFamily(fontFamily) {
+        if (!fontFamily) return;
+        clearTimeout(_debounceTimers.font);
+        _debounceTimers.font = setTimeout(() => this.applyStyle('font', fontFamily), 0);
+    },
+    changeFontSize(fontSize) {
+        if (!fontSize) return;
+        clearTimeout(_debounceTimers.size);
+        _debounceTimers.size = setTimeout(() => this.applyStyle('size', fontSize), 0);
+    },
+    execStyle(styleType) {
+        this.applyStyle(styleType);
+    },
+    align(alignType) {
+        this.applyStyle('align', alignType);
+    },
+    applyStyle(styleType, value) {
+        const savedRange = EditorState.get('savedRange');
+        const editor     = EditorState.get('editor');
+        let selectionData = this.getSelectionData();
+        if (!selectionData && savedRange) selectionData = { type: 'preview', range: savedRange, text: savedRange.toString() };
+        if (!selectionData) return;
+
+        const styleMetadata = styleMap[styleType];
+        if (!styleMetadata) return;
+
+        EditorState.startSync();
+        try {
+            if (selectionData.type === 'preview') {
+                const selection = window.getSelection();
+                if (!selection || !selection.rangeCount) return;
+                const selectionRange = selection.getRangeAt(0);
+                if (!selectionRange.toString().trim()) return;
+
+                const startElement = getResolvedNode(selectionRange.startContainer);
+                let paragraphElement   = startElement.closest('p');
+
+                if (!paragraphElement) {
+                    const parentCell = startElement.closest('td');
+                    if (parentCell) {
+                        if (styleType === 'align') {
+                            const alignValue = styleMetadata.val(value);
+                            const currentAlign = parentCell.style.textAlign;
+                            if (currentAlign === alignValue) {
+                                parentCell.style.removeProperty('text-align');
+                            } else {
+                                parentCell.style.textAlign = alignValue;
+                            }
+                            if (parentCell.getAttribute('style') === '') parentCell.removeAttribute('style');
+                            const nextAlign = parentCell.style.textAlign || '';
+                            if (typeof this.updateToolbarStatus === 'function') {
+                                this.updateToolbarStatus();
+                            }
+                            EditorState.endSync(true);
+                            if (typeof window.syncPreviewToEditor === 'function') window.syncPreviewToEditor();
+                            return;
+                        }
+                        _applyToContainer(parentCell, selectionRange, styleMetadata, styleType, value, selection, true);
+                        return;
+                    }
+                }
+                if (!paragraphElement) {
+                    paragraphElement = document.createElement('p');
+                    selectionRange.surroundContents(paragraphElement);
+                }
+                if (styleType === 'align') {
+                    _applyAlign(paragraphElement, styleMetadata.val(value), selection);
+                    return;
+                }
+                _applyToContainer(paragraphElement, selectionRange, styleMetadata, styleType, value, selection, false);
+
+            } else if (selectionData.type === 'editor') {
+                const plainText = selectionData.text.replace(/<\/?[^>]+(>|$)/g, '');
+                let wrappedHtml;
+                if (styleMetadata.tag) {
+                    wrappedHtml = `<${styleMetadata.tag}>${plainText}</${styleMetadata.tag}>`;
+                } else {
+                    wrappedHtml = `<span style="${styleMetadata.css(value)}">${plainText}</span>`;
+                }
+                editor.replaceSelection(wrappedHtml);
+            }
+        } catch (_) {
+        } finally {
+            EditorState.endSync(true);
+            if (selectionData.type === 'editor') editor.focus();
+            if (typeof window.syncPreviewToEditor === 'function') window.syncPreviewToEditor();
+            
+            if (typeof this.updateToolbarStatus === 'function') this.updateToolbarStatus();
+            
+            if (window._headerLockRange && typeof window.applyHeaderLock === 'function') {
+                requestAnimationFrame(() => window.applyHeaderLock());
+            }
+        }
+    },
+
+    getSelectionData() {
+        const preview   = EditorState.get('preview');
+        const editor    = EditorState.get('editor');
+        const previewArea = document.getElementById('previewArea');
+        const selection   = window.getSelection();
+        if (selection?.anchorNode && previewArea?.contains(selection.anchorNode)) {
+            const range = selection.getRangeAt(0);
+            return { type: 'preview', range, text: range.toString() };
+        }
+        const selectedText = editor?.getSelection();
+        if (editor?.hasFocus() || selectedText) {
+            return { type: 'editor', text: selectedText || '', isCollapsed: !selectedText };
+        }
+        return null;
+    },
+
+    updateToolbarStatus() {
+        const selection = window.getSelection();
+        if (!selection || !selection.rangeCount) return;
+        const range = selection.getRangeAt(0);
+
+        let targetElements = [];
+        if (!range.collapsed) {
+            const treeWalker = document.createTreeWalker(
+                range.commonAncestorContainer,
+                NodeFilter.SHOW_TEXT,
+                { acceptNode: node => (range.intersectsNode(node) && node.nodeValue.trim())
+                    ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP }
+            );
+            let textNode;
+            while ((textNode = treeWalker.nextNode())) {
+                const parentElement = textNode.parentElement;
+                if (parentElement && !targetElements.includes(parentElement)) targetElements.push(parentElement);
+            }
+        }
+        if (targetElements.length === 0) {
+            let startNode = range.startContainer;
+            if (startNode.nodeType === 3) startNode = startNode.parentElement;
+            targetElements = [startNode];
+        }
+
+        const computedStyleCache = new Map();
+        const getComputedStyleCached = (element) => {
+            if (!computedStyleCache.has(element)) computedStyleCache.set(element, window.getComputedStyle(element));
+            return computedStyleCache.get(element);
+        };
+        const allElementsHave = (checkFn) => targetElements.length > 0 && targetElements.every(checkFn);
+
+        const activeStyles = {
+            bold:      allElementsHave(element => { const computed = getComputedStyleCached(element); return element.closest('strong,b') !== null || computed.fontWeight === 'bold' || parseInt(computed.fontWeight) >= 700; }),
+            italic:    allElementsHave(element => { const computed = getComputedStyleCached(element); return element.closest('em,i')     !== null || computed.fontStyle === 'italic'; }),
+            underline: allElementsHave(element => { const computed = getComputedStyleCached(element); return element.closest('u')        !== null || computed.textDecoration.includes('underline'); }),
+            strike:    allElementsHave(element => { const computed = getComputedStyleCached(element); return element.closest('strike,s,del') !== null || computed.textDecoration.includes('line-through'); }),
+        };
+
+        const buttonCache = window._toolbarBtnCache || {};
+        Object.keys(activeStyles).forEach(styleType => {
+            const button = buttonCache[styleType]; 
+            if (button) window.setButtonActive(button, activeStyles[styleType]);
+        });
+
+        const anchorElement = targetElements[0] || range.startContainer;
+        const blockElement = getResolvedNode(anchorElement).closest('p, td, th, div');
+        const blockComputedStyle = blockElement ? window.getComputedStyle(blockElement) : null;
+        let currentAlign = blockComputedStyle ? blockComputedStyle.textAlign : 'left';
+        if (currentAlign === 'start' || !currentAlign) currentAlign = 'left';
+
+        ['left', 'center', 'right'].forEach(alignType => {
+            const button = buttonCache['align' + alignType.charAt(0).toUpperCase() + alignType.slice(1)];
+            if (button) {
+                window.setButtonActive(button, currentAlign === alignType);
+            }
+        });
+    }
+};
+
+function walkNodes(node, callback) {
+    if (!node) return;
+    if (callback(node) === false) return false;
+    let childNode = node.firstChild;
+    while (childNode) {
+        if (walkNodes(childNode, callback) === false) return false;
+        childNode = childNode.nextSibling;
+    }
+}
+
+function buildCharMap(paragraphElement) {
+    const charMap = [];
+
+    function collectInlineStyles(element) {
+        const inlineStyle = element.style;
+        const styleRecord = {};
+        if (inlineStyle.fontWeight)      styleRecord.fontWeight      = inlineStyle.fontWeight;
+        if (inlineStyle.fontStyle)       styleRecord.fontStyle       = inlineStyle.fontStyle;
+        if (inlineStyle.textDecoration)  styleRecord.textDecoration  = inlineStyle.textDecoration;
+        if (inlineStyle.color)           styleRecord.color           = ColorManager.toOriginalForm(inlineStyle.color);
+        if (inlineStyle.backgroundColor) styleRecord.backgroundColor = ColorManager.toOriginalForm(inlineStyle.backgroundColor);
+        if (inlineStyle.fontFamily)      styleRecord.fontFamily      = inlineStyle.fontFamily;
+        if (inlineStyle.fontSize)        styleRecord.fontSize        = inlineStyle.fontSize;
+        const tagName = element.tagName?.toLowerCase();
+        if (tagName === SEMANTIC_TAG_MAP.bold)      styleRecord.fontWeight     = STYLE_VALUES.BOLD;
+        if (tagName === SEMANTIC_TAG_MAP.italic)    styleRecord.fontStyle      = STYLE_VALUES.ITALIC;
+        if (tagName === SEMANTIC_TAG_MAP.underline) {
+            styleRecord.textDecoration = TextFormatTools.toggleDecoration(styleRecord.textDecoration, STYLE_VALUES.UNDERLINE, false);
+        }
+        if (tagName === SEMANTIC_TAG_MAP.strike) {
+            styleRecord.textDecoration = TextFormatTools.toggleDecoration(styleRecord.textDecoration, STYLE_VALUES.STRIKE, false);
+        }
+        if (tagName === 'b' && !styleRecord.fontWeight) styleRecord.fontWeight = STYLE_VALUES.BOLD;
+        if (tagName === 'i' && !styleRecord.fontStyle)  styleRecord.fontStyle  = STYLE_VALUES.ITALIC;
+        return styleRecord;
+    }
+    const semanticTagNames = Object.values(SEMANTIC_TAG_MAP).map(tag => tag.toUpperCase());
+
+    function walkAndCollect(node, inheritedStyles) {
+        if (node.nodeType === Node.TEXT_NODE) {
+            for (const character of node.textContent) {
+                charMap.push({ char: character, styles: Object.assign({}, inheritedStyles) });
+            }
+        } else if (node.nodeType === Node.ELEMENT_NODE) {
+            if (node.tagName === 'BR') {
+                charMap.push({ char: '\n', isBr: true, styles: Object.assign({}, inheritedStyles) });
+                return;
+            }
+            let ownStyles = {};
+            if (['SPAN', ...semanticTagNames].includes(node.tagName)) {
+                ownStyles = collectInlineStyles(node);
+            }
+            const mergedStyles = Object.assign({}, inheritedStyles, ownStyles);
+            if (inheritedStyles.textDecoration && ownStyles.textDecoration) {
+                mergedStyles.textDecoration = TextFormatTools.mergeDecorations(inheritedStyles.textDecoration, ownStyles.textDecoration);
+            }
+            for (const childNode of node.childNodes) {
+                walkAndCollect(childNode, mergedStyles);
+            }
+        }
+    }
+    walkAndCollect(paragraphElement, collectInlineStyles(paragraphElement));
     return charMap;
 }
 
-function rebuildParagraph(pEl, charMap, isFullSelection) {
-    const pAlign = pEl.style.textAlign;
+function rebuildParagraph(paragraphElement, charMap, isFullSelection) {
+    const savedTextAlign = paragraphElement.style.textAlign;
+    paragraphElement.innerHTML = '';
+    paragraphElement.removeAttribute('class');
+    paragraphElement.removeAttribute('style');
+    if (savedTextAlign) paragraphElement.style.textAlign = savedTextAlign;
 
-    pEl.innerHTML = '';
-    pEl.removeAttribute('class');
-    pEl.removeAttribute('style');
-    if (pAlign) pEl.style.textAlign = pAlign;
-
-    let i = 0;
-    while (i < charMap.length) {
-        if (charMap[i].isBr) {
-            pEl.appendChild(document.createElement('br'));
-            i++;
-            continue;
-        }
-        const curKey = getStyleKey(charMap[i].styles);
-        let j = i + 1;
-        while (j < charMap.length && !charMap[j].isBr && getStyleKey(charMap[j].styles) === curKey) j++;
-        const text = charMap.slice(i, j).map(c => c.char).join('');
-        const styles = charMap[i].styles;
-
-        if (!Object.keys(styles).length) {
-            pEl.appendChild(document.createTextNode(text));
-        } else {
-            pEl.appendChild(buildSemanticNode(text, styles));
-        }
-        i = j;
+    let charIndex = 0;
+    while (charIndex < charMap.length) {
+        if (charMap[charIndex].isBr) { paragraphElement.appendChild(document.createElement('br')); charIndex++; continue; }
+        const currentStyleKey = TextFormatTools.styleKey(charMap[charIndex].styles);
+        let nextIndex = charIndex + 1;
+        while (nextIndex < charMap.length && !charMap[nextIndex].isBr && TextFormatTools.styleKey(charMap[nextIndex].styles) === currentStyleKey) nextIndex++;
+        const characters = charMap.slice(charIndex, nextIndex).map(entry => entry.char).join('');
+        const styles      = charMap[charIndex].styles;
+        paragraphElement.appendChild(
+            Object.keys(styles).length === 0
+                ? document.createTextNode(characters)
+                : buildSemanticNode(characters, styles)
+        );
+        charIndex = nextIndex;
     }
 }
 
-function buildSemanticNode(text, styles) {
-    const spanStyles = {};
+function buildSemanticNode(textContent, styles) {
+    const spanStyles   = {};
     const semanticTags = [];
 
-    const td = styles.textDecoration || '';
-    if (td.includes('underline'))    semanticTags.push('u');
-    if (td.includes('line-through')) semanticTags.push('s');
-    if (styles.fontWeight === 'bold' || parseInt(styles.fontWeight) >= 700) semanticTags.push('strong');
-    if (styles.fontStyle === 'italic') semanticTags.push('em');
-
+    const textDecoration = styles.textDecoration || '';
+    if (textDecoration.includes(STYLE_VALUES.UNDERLINE)) semanticTags.push('u');
+    if (textDecoration.includes(STYLE_VALUES.STRIKE))    semanticTags.push('s');
+    if (styles.fontWeight === STYLE_VALUES.BOLD || parseInt(styles.fontWeight) >= STYLE_VALUES.BOLD_NUM) { semanticTags.push(SEMANTIC_TAG_MAP.bold); }
+    if (styles.fontStyle === STYLE_VALUES.ITALIC) { semanticTags.push(SEMANTIC_TAG_MAP.italic); }
     if (styles.color)           spanStyles.color           = styles.color;
     if (styles.backgroundColor) spanStyles.backgroundColor = styles.backgroundColor;
     if (styles.fontFamily)      spanStyles.fontFamily      = styles.fontFamily;
@@ -98,451 +337,325 @@ function buildSemanticNode(text, styles) {
 
     let innerNode;
     if (Object.keys(spanStyles).length > 0) {
-        const span = document.createElement('span');
-        const styleParts = [];
-        if (spanStyles.color)           styleParts.push(`color:${spanStyles.color}`);
-        if (spanStyles.backgroundColor) styleParts.push(`background-color:${spanStyles.backgroundColor}`);
-        if (spanStyles.fontFamily) {
-            const fontVal = spanStyles.fontFamily.split(',').map(s => {
-                const name = s.trim().replace(/&quot;|['"]/g, '').trim();
-                return name ? `'${name}'` : '';
-            }).filter(Boolean).join(', ');
-            styleParts.push(`font-family:${fontVal}`);
-        }
-        if (spanStyles.fontSize)        styleParts.push(`font-size:${spanStyles.fontSize}`);
-        span.setAttribute('style', styleParts.join(';'));
-        span.textContent = text;
-        innerNode = span;
+        const spanElement = document.createElement('span');
+        const cssParts = [];
+        if (spanStyles.color)           cssParts.push(`color:${spanStyles.color}`);
+        if (spanStyles.backgroundColor) cssParts.push(`background-color:${spanStyles.backgroundColor}`);
+        if (spanStyles.fontFamily)      cssParts.push(`font-family:${ColorManager.normFont(spanStyles.fontFamily)}`);
+        if (spanStyles.fontSize)        cssParts.push(`font-size:${spanStyles.fontSize}`);
+        spanElement.setAttribute('style', cssParts.join(';'));
+        spanElement.textContent = textContent;
+        innerNode = spanElement;
     } else {
-        innerNode = document.createTextNode(text);
+        innerNode = document.createTextNode(textContent);
     }
 
-    let current = innerNode;
-    for (let k = semanticTags.length - 1; k >= 0; k--) {
-        const wrapper = document.createElement(semanticTags[k]);
-        wrapper.appendChild(current);
-        current = wrapper;
+    let currentNode = innerNode;
+    for (let tagIndex = semanticTags.length - 1; tagIndex >= 0; tagIndex--) {
+        const wrapperElement = document.createElement(semanticTags[tagIndex]);
+        wrapperElement.appendChild(currentNode);
+        currentNode = wrapperElement;
     }
-    return current;
+    return currentNode;
 }
 
-function getSelectionCharRange(pEl, range) {
-    let startIdx = -1, endIdx = -1, charCount = 0;
-    function walk(node) {
-        if (node.nodeType === 3) {
-            let offset = 0;
-            for (const ch of node.textContent) {
-                if (node === range.startContainer && offset === range.startOffset) startIdx = charCount;
-                if (node === range.endContainer   && offset === range.endOffset)   endIdx   = charCount;
-                charCount++;
-                offset += ch.length;
+function getSelectionCharRange(paragraphElement, selectionRange) {
+    let startCharIndex = -1, endCharIndex = -1, totalCharCount = 0;
+
+    function walkAndCount(node) {
+        if (node.nodeType === Node.TEXT_NODE) {
+            let charOffset = 0;
+            for (const character of node.textContent) {
+                if (node === selectionRange.startContainer && charOffset === selectionRange.startOffset) startCharIndex = totalCharCount;
+                if (node === selectionRange.endContainer   && charOffset === selectionRange.endOffset)   endCharIndex   = totalCharCount;
+                totalCharCount++;
+                charOffset += character.length;
             }
-            if (node === range.endContainer   && offset === range.endOffset)   endIdx   = charCount;
-            if (node === range.startContainer && offset === range.startOffset) startIdx = charCount;
-        } else if (node.nodeType === 1) {
-            if (node.tagName === 'BR') { charCount++; return; }
-            for (const child of node.childNodes) walk(child);
+            if (node === selectionRange.endContainer   && charOffset === selectionRange.endOffset)   endCharIndex   = totalCharCount;
+            if (node === selectionRange.startContainer && charOffset === selectionRange.startOffset) startCharIndex = totalCharCount;
+        } else if (node.nodeType === Node.ELEMENT_NODE) {
+            if (node.tagName === 'BR') { totalCharCount++; return; }
+            for (const childNode of node.childNodes) walkAndCount(childNode);
         }
     }
-    walk(pEl);
-    if (startIdx === -1) startIdx = 0;
-    if (endIdx   === -1) endIdx   = charCount;
-    return { startIdx, endIdx, total: charCount };
+    walkAndCount(paragraphElement);
+    if (startCharIndex === -1) startCharIndex = 0;
+    if (endCharIndex   === -1) endCharIndex   = totalCharCount;
+    return { startIdx: startCharIndex, endIdx: endCharIndex, total: totalCharCount };
 }
 
-function restoreSelection(sel, pEl, startIdx, endIdx, isFullSelection) {
+function restoreSelection(selection, paragraphElement, startIndex, endIndex, isFullSelection) {
     try {
-        const r = document.createRange();
+        const newRange = document.createRange();
         if (isFullSelection) {
-            r.selectNodeContents(pEl);
-            sel.removeAllRanges();
-            sel.addRange(r);
+            newRange.selectNodeContents(paragraphElement);
+            selection.removeAllRanges();
+            selection.addRange(newRange);
             return;
         }
-        function findNode(targetIdx) {
-            let count = 0;
-            function walk(node) {
-                if (node.nodeType === 3) {
-                    const len = node.textContent.length;
-                    if (count + len > targetIdx) return { node, offset: targetIdx - count };
-                    count += len;
+
+        function findNodeAtIndex(targetIndex) {
+            let charCount = 0;
+            function walkToFind(node) {
+                if (node.nodeType === Node.TEXT_NODE) {
+                    const textLength = node.textContent.length;
+                    if (charCount + textLength > targetIndex) return { node, offset: targetIndex - charCount };
+                    charCount += textLength;
                     return null;
-                } else if (node.nodeType === 1) {
-                    if (node.tagName === 'BR') { count++; return null; }
-                    for (const child of node.childNodes) {
-                        const res = walk(child);
-                        if (res) return res;
+                } else if (node.nodeType === Node.ELEMENT_NODE) {
+                    if (node.tagName === 'BR') { charCount++; return null; }
+                    for (const childNode of node.childNodes) {
+                        const result = walkToFind(childNode);
+                        if (result) return result;
                     }
                 }
                 return null;
             }
-            return walk(pEl);
+            return walkToFind(paragraphElement);
         }
-        const s = findNode(startIdx);
-        const e = findNode(endIdx);
-        if (s && e) { r.setStart(s.node, s.offset); r.setEnd(e.node, e.offset); }
-        else r.selectNodeContents(pEl);
-        sel.removeAllRanges();
-        sel.addRange(r);
-    } catch (err) {
+        const startNode = findNodeAtIndex(startIndex);
+        const endNode   = findNodeAtIndex(endIndex);
+        if (startNode && endNode) { newRange.setStart(startNode.node, startNode.offset); newRange.setEnd(endNode.node, endNode.offset); }
+        else newRange.selectNodeContents(paragraphElement);
+        selection.removeAllRanges();
+        selection.addRange(newRange);
+    } catch (_) {
     }
 }
 
-const styleMap = {
-    font: { 
-        key: 'fontFamily', 
-        val: (v) => v, 
-        css: (v) => {
-            const parts = v.split(',').map(s => {
-                const name = s.trim().replace(/&quot;|['"]/g, '').trim();
-                return name ? `'${name}'` : '';
-            }).filter(Boolean);
-            return `font-family: ${parts.join(', ')};`;
-        }
-    },
-    size:      { key: 'fontSize',        val: (v) => v,                   css: (v) => `font-size: ${v};` },
-    bold:      { key: 'fontWeight',      val: () => 'bold',               css: () => 'font-weight: bold;' },
-    italic:    { key: 'fontStyle',       val: () => 'italic',             css: () => 'font-style: italic;' },
-    underline: { key: 'textDecoration',  val: () => 'underline',          css: () => 'text-decoration: underline;' },
-    strike:    { key: 'textDecoration',  val: () => 'line-through',       css: () => 'text-decoration: line-through;' },
-    align:     { key: 'textAlign',       val: (v) => v,                   css: (v) => `text-align: ${v};` },
-    text:      { key: 'color',           val: (v) => normalizeColor(v),   css: (v) => `color: ${v};` },
-    bg:        { key: 'backgroundColor', val: (v) => normalizeColor(v),   css: (v) => `background-color: ${v};` },
-};
-
-function applyStyle(styleType, value) {
-    let data = getSelectionData();
-    if (!data && savedRange) data = { type: 'preview', range: savedRange, text: savedRange.toString() };
-    if (!data) return;
-
-    const sm = styleMap[styleType];
-    if (!sm) return;
-
-    isSyncing = true;
-    try {
-        if (data.type === 'preview') {
-            const sel = window.getSelection();
-            if (!sel || !sel.rangeCount) return;
-            const range = sel.getRangeAt(0);
-            if (!range.toString().trim()) return;
-
-            const startEl = range.startContainer.nodeType === 3
-                ? range.startContainer.parentElement
-                : range.startContainer;
-            let parentP = startEl.closest('p');
-
-            if (!parentP) {
-                const parentTd = startEl.closest('td');
-                if (parentTd) {
-                    if (styleType === 'align') { isSyncing = false; return; }
-                    _applyToTd(parentTd, range, sm, styleType, value, sel);
-                    return;
-                }
-            }
-            if (!parentP) {
-                parentP = document.createElement('p');
-                range.surroundContents(parentP);
-            }
-            if (styleType === 'align') {
-                _applyAlign(parentP, sm.val(value), sel);
-                return;
-            }
-            _applyToP(parentP, range, sm, styleType, value, sel);
-
-        } else if (data.type === 'editor') {
-            const pure = data.text.replace(/<\/?[^>]+(>|$)/g, '');
-            let wrapped;
-            if (styleType === 'bold')      wrapped = `<strong>${pure}</strong>`;
-            else if (styleType === 'italic')    wrapped = `<em>${pure}</em>`;
-            else if (styleType === 'underline') wrapped = `<u>${pure}</u>`;
-            else if (styleType === 'strike')    wrapped = `<s>${pure}</s>`;
-            else wrapped = `<span style="${sm.css(value)}">${pure}</span>`;
-            editor.replaceSelection(wrapped);
-        }
-    } catch (e) {
-    } finally {
-        isSyncing = false;
-        if (data.type === 'editor') editor.focus();
-        if (typeof window.syncPreviewToEditor === 'function') window.syncPreviewToEditor();
-        if (typeof updateToolbarStatus === 'function') updateToolbarStatus();
-        if (window._headerLockRange && typeof window.applyHeaderLock === 'function') {
-            requestAnimationFrame(() => window.applyHeaderLock());
-        }
-    }
-}
-
-function _applyToP(parentP, range, sm, styleType, value, sel) {
-    const charMap = buildCharMap(parentP);
-    const { startIdx, endIdx, total } = getSelectionCharRange(parentP, range);
-    const selected = charMap.slice(startIdx, endIdx);
-    const isColor  = styleType === 'text' || styleType === 'bg';
-    const isActive = !isColor && selected.length > 0 && selected.every(c => {
-        const v = c.styles[sm.key];
-        if (!v) return false;
-        if (sm.key === 'fontWeight') return v === 'bold' || parseInt(v) >= 700;
-        return v === sm.val(value);
+function _applyToContainer(container, selectionRange, styleMetadata, styleType, value, selection, isTd = false) {
+    const charMap = buildCharMap(container);
+    const { startIdx, endIdx, total } = getSelectionCharRange(container, selectionRange);
+    const selectedChars = charMap.slice(startIdx, endIdx).filter(entry => !entry.isBr);
+    const isColorStyle  = styleType === 'text' || styleType === 'bg';
+    const isCurrentlyActive = !isColorStyle && selectedChars.length > 0 && selectedChars.every(entry => {
+        const styleValue = entry.styles[styleMetadata.key];
+        if (!styleValue) return false;
+        if (styleMetadata.key === 'fontWeight') return styleValue === STYLE_VALUES.BOLD || parseInt(styleValue) >= STYLE_VALUES.BOLD_NUM;
+        if (styleMetadata.key === 'textDecoration') return styleValue.includes(styleMetadata.val());
+        if (styleMetadata.key === 'fontStyle') return styleValue === STYLE_VALUES.ITALIC;
+        return styleValue === styleMetadata.val(value);
     });
-    const isFull = startIdx === 0 && endIdx === total && endIdx - startIdx === total;
+    const hasBrChar  = isTd && charMap.some(entry => entry.isBr);
+    const isFullRange = (!isTd
+        ? startIdx === 0 && endIdx === total && endIdx - startIdx === total
+        : !hasBrChar && startIdx === 0 && endIdx === total
+    );
 
-    for (let i = startIdx; i < endIdx; i++) {
-        if (isColor) charMap[i].styles[sm.key] = sm.val(value);
-        else if (isActive) delete charMap[i].styles[sm.key];
-        else charMap[i].styles[sm.key] = sm.val(value);
-    }
-    rebuildParagraph(parentP, charMap, isFull);
-    setButtonState(styleType, isColor ? true : !isActive);
-    restoreSelection(sel, parentP, startIdx, endIdx, isFull);
-}
-
-function _applyToTd(parentTd, range, sm, styleType, value, sel) {
-    try {
-        const charMap = buildCharMap(parentTd);
-        const { startIdx, endIdx, total } = getSelectionCharRange(parentTd, range);
-        const selected = charMap.slice(startIdx, endIdx).filter(c => !c.isBr);
-        const isColor  = styleType === 'text' || styleType === 'bg';
-        const isActive = !isColor && selected.length > 0 && selected.every(c => {
-            const v = c.styles[sm.key];
-            if (!v) return false;
-            if (sm.key === 'fontWeight') return v === 'bold' || parseInt(v) >= 700;
-            return v === sm.val(value);
-        });
-        const hasBr = charMap.some(c => c.isBr);
-        const isFull = !hasBr && startIdx === 0 && endIdx === total;
-
-        for (let i = startIdx; i < endIdx; i++) {
-            if (charMap[i].isBr) continue; 
-            if (isColor) charMap[i].styles[sm.key] = sm.val(value);
-            else if (isActive) delete charMap[i].styles[sm.key];
-            else charMap[i].styles[sm.key] = sm.val(value);
-        }
-
-
-        const tdStyle = parentTd.getAttribute('style') || '';
-        rebuildParagraph(parentTd, charMap, isFull);
-        if (tdStyle) parentTd.setAttribute('style', tdStyle);
-
-        restoreSelection(sel, parentTd, startIdx, endIdx, isFull);
-    } catch (e) {
-    } finally {
-        isSyncing = false;
-        if (typeof window.syncPreviewToEditor === 'function') window.syncPreviewToEditor();
-        if (typeof updateToolbarStatus === 'function') updateToolbarStatus();
-        if (window._headerLockRange && typeof window.applyHeaderLock === 'function') {
-            requestAnimationFrame(() => window.applyHeaderLock());
+    for (let charIndex = startIdx; charIndex < endIdx; charIndex++) {
+        if (charMap[charIndex].isBr) continue;
+        if (isColorStyle) {
+            charMap[charIndex].styles[styleMetadata.key] = styleMetadata.val(value);
+        } else if (styleMetadata.key === 'textDecoration') {
+            const decorationValue = styleMetadata.val();
+            const currentDecoration = charMap[charIndex].styles[styleMetadata.key] || '';    
+            const nextDecoration = TextFormatTools.toggleDecoration(currentDecoration, decorationValue, isCurrentlyActive);
+            if (nextDecoration) {
+                charMap[charIndex].styles[styleMetadata.key] = nextDecoration;
+            } else {
+                delete charMap[charIndex].styles[styleMetadata.key];
+            }
+        } else if (isCurrentlyActive) {
+            delete charMap[charIndex].styles[styleMetadata.key];
+        } else {
+            charMap[charIndex].styles[styleMetadata.key] = styleMetadata.val(value);
         }
     }
+
+    const savedContainerStyle = isTd ? (container.getAttribute('style') || '') : null;
+    rebuildParagraph(container, charMap, isFullRange);
+    if (isTd && savedContainerStyle) container.setAttribute('style', savedContainerStyle);
+
+    if (!isTd) {
+        TextEditor.updateToolbarStatus();
+    }
+    restoreSelection(selection, container, startIdx, endIdx, isFullRange);
 }
 
-function _applyAlign(parentP, styleVal, sel) {
-    const cur = parentP.style.textAlign;
-    parentP.style.textAlign = (cur === styleVal || styleVal === 'left') ? '' : styleVal;
-    if (parentP.getAttribute('style') === '') parentP.removeAttribute('style');
-    const next = parentP.style.textAlign || 'left';
-    ['left', 'center', 'right'].forEach(t => {
-        const b = document.querySelector(`.icon-btn[onclick*="align('${t}')"]`);
-        if (!b) return;
-        const on = t !== 'left' && next === t;
-        window.setButtonActive(b, on);
-    });
-    const fr = document.createRange();
-    fr.selectNodeContents(parentP);
-    sel.removeAllRanges();
-    sel.addRange(fr);
+function _applyAlign(paragraphElement, alignValue, selection) {
+    const currentAlign = paragraphElement.style.textAlign;
+    paragraphElement.style.textAlign = (currentAlign === alignValue || alignValue === 'left') ? '' : alignValue;
+    if (paragraphElement.getAttribute('style') === '') paragraphElement.removeAttribute('style');
+    const nextAlign = paragraphElement.style.textAlign || 'left';
+	if (typeof TextEditor.updateToolbarStatus === 'function') {
+        TextEditor.updateToolbarStatus();
+    }
+    const fullRange = document.createRange();
+    fullRange.selectNodeContents(paragraphElement);
+    selection.removeAllRanges();
+    selection.addRange(fullRange);
 }
 
-/* 공개 헬퍼 */
-
-let _fontDebounceTimer = null;
-const changeFontFamily = (font) => {
-    if (!font) return;
-    clearTimeout(_fontDebounceTimer);
-    _fontDebounceTimer = setTimeout(() => applyStyle('font', font), 0);
-};
-
-let _sizeDebounceTimer = null;
-const changeFontSize = (size) => {
-    if (!size) return;
-    clearTimeout(_sizeDebounceTimer);
-    _sizeDebounceTimer = setTimeout(() => applyStyle('size', size), 0);
-};
-
-const execStyle = (type) => applyStyle(type);
-const align     = (type) => applyStyle('align', type);
-
-/* 컬러피커*/
-function openColor(mode, btn, event) {
+// ── 컬러 피커 ─────────────────────────────────────────────
+function openColor(colorMode, triggerButton, event) {
     if (event) { event.stopPropagation(); event.preventDefault(); }
     if (window.activePicker) return;
 
-    const sel = window.getSelection();
-    let localRange = null;
-    let startColor = mode === 'text' ? '#000000' : '#ffffff';
+    const selection = window.getSelection();
+    let savedSelectionRange = null;
+    let initialColor = colorMode === 'text' ? '#000000' : '#ffffff';
 
-    if (sel && sel.rangeCount > 0) {
-        localRange = sel.getRangeAt(0).cloneRange();
-        const node = localRange.startContainer.nodeType === 3
-            ? localRange.startContainer.parentElement
-            : localRange.startContainer;
-        const raw = window.getComputedStyle(node)[mode === 'text' ? 'color' : 'backgroundColor'];
-        startColor = normalizeColor(raw) || startColor;
+    if (selection && selection.rangeCount > 0) {
+        savedSelectionRange = selection.getRangeAt(0).cloneRange();
+        const anchorElement = getResolvedNode(savedSelectionRange.startContainer);
+        const computedColor = window.getComputedStyle(anchorElement)[colorMode === 'text' ? 'color' : 'backgroundColor'];
+        initialColor = ColorManager.toOriginalForm(computedColor) || initialColor;
     }
 
     const picker = new Picker({
-        parent: btn,
-        popup: 'bottom',
-        alpha: false,
+        parent: triggerButton,
+        popup:  'bottom',
+        alpha:  false,
         editor: true,
-        color: startColor,
+        color:  initialColor,
         onClose: () => {
             if (window.activePicker) { window.activePicker.destroy(); window.activePicker = null; }
         },
-        onDone: (color) => {
-            const finalHex = color.hex.slice(0, 7).toLowerCase();
-            if (localRange) {
-                const s = window.getSelection();
-                s.removeAllRanges();
-                s.addRange(localRange);
-                applyStyle(mode, finalHex);
+        onDone: (selectedColor) => {
+            const finalHex = selectedColor.hex.slice(0, 7).toLowerCase();
+            if (savedSelectionRange) {
+                const selection = window.getSelection();
+                selection.removeAllRanges();
+                selection.addRange(savedSelectionRange);
+                TextEditor.applyStyle(colorMode, finalHex);
             }
             if (window.activePicker) { window.activePicker.destroy(); window.activePicker = null; }
         },
     });
-	picker.show(); 
+    picker.show();
     window.activePicker = picker;
 }
 
-/* 하이퍼링크*/
+// ── 하이퍼링크 ────────────────────────────────────────────
+
 window.prepareLinkData = function () {
-    const sel = window.getSelection();
-    if (!sel || !sel.rangeCount) return;
-    const range = sel.getRangeAt(0);
-	
-    const startNode = range.startContainer;
-    const parentA   = (startNode.nodeType === 3 ? startNode.parentElement : startNode).closest('a');
-    const parentTd  = (startNode.nodeType === 3 ? startNode.parentElement : startNode).closest('td');
+    const selection = window.getSelection();
+    if (!selection || !selection.rangeCount) return null;
+    const selectionRange = selection.getRangeAt(0);
 
-	const clone = range.cloneContents();
-    const tempDiv = document.createElement('div');
-    tempDiv.appendChild(clone);
-	const imgTag = tempDiv.querySelector('img');
-	
-	const textInput = document.getElementById('modalTextDisplay');
-    const previewContainer = document.getElementById('linkImgPreview');
-    const previewImg = document.getElementById('modalPreviewImg');
-	
-	if (imgTag) {
-        textInput.value = imgTag.src; 
-		const previewImg = document.getElementById('modalPreviewImg');
-        if (previewImg) {
-            previewImg.src = imgTag.src;
-            document.getElementById('linkImgPreview').style.display = 'block';
+    const startNode     = selectionRange.startContainer;
+    const parentAnchor  = getResolvedNode(startNode).closest('a');
+    const parentCell    = getResolvedNode(startNode).closest('td');
+
+    const clonedContents = selectionRange.cloneContents();
+    const tempContainer  = document.createElement('div');
+    tempContainer.appendChild(clonedContents);
+    const imageElement = tempContainer.querySelector('img');
+
+    const textInputElement   = document.getElementById('modalTextDisplay');
+    const previewImageEl     = document.getElementById('modalPreviewImg');
+    const imagePreviewBox    = document.getElementById('linkImgPreview');
+
+    if (imageElement) {
+        textInputElement.value = imageElement.src;
+        if (previewImageEl) {
+            previewImageEl.src = imageElement.src;
+            imagePreviewBox.style.display = 'block';
         }
-        textInput.setAttribute('data-is-img', 'true');
-        textInput.setAttribute('data-img-style', imgTag.style.cssText);
-
+        textInputElement.setAttribute('data-is-img', 'true');
+        textInputElement.setAttribute('data-img-style', imageElement.style.cssText);
     } else {
-        textInput.value = range.toString().trim();
-        textInput.removeAttribute('data-is-img');
-        if (document.getElementById('linkImgPreview')) {
-            document.getElementById('linkImgPreview').style.display = 'none';
-        }
+        textInputElement.value = selectionRange.toString().trim();
+        textInputElement.removeAttribute('data-is-img');
+        if (imagePreviewBox) imagePreviewBox.style.display = 'none';
     }
 
-    document.getElementById('modalLinkHref').value    = parentA?.getAttribute('href') || '';
-    document.getElementById('modalTdId').value        = parentTd?.id?.replace('user_content_', '') || '';
-	
-    if (parentA) {
-        document.getElementById('modalTargetBlank').checked = (parentA.getAttribute('target') || '_blank') === '_blank';
-        document.getElementById('modalUnderline').checked   = parentA.style.textDecoration === 'none';
+    document.getElementById('modalLinkHref').value = parentAnchor?.getAttribute('href') || '';
+    document.getElementById('modalTdId').value     = parentCell?.id?.replace(CONSTANTS.USER_CONTENT_PREFIX, '') || '';
+
+    if (parentAnchor) {
+        document.getElementById('modalTargetBlank').checked = (parentAnchor.getAttribute('target') || '_blank') === '_blank';
+        document.getElementById('modalUnderline').checked   = parentAnchor.style.textDecoration === 'none';
     } else {
         document.getElementById('modalTargetBlank').checked = true;
         document.getElementById('modalUnderline').checked   = true;
     }
-    window.savedModalRange = range.cloneRange();
+    return selectionRange.cloneRange();
 };
 
 window.applyLinkChanges = function () {
-    const textInput = document.getElementById('modalTextDisplay');
-    const newText   = textInput.value;
-    const isImg     = textInput.getAttribute('data-is-img') === 'true';
-    const href      = document.getElementById('modalLinkHref').value.trim();
-    const tdIdRaw   = document.getElementById('modalTdId').value.trim();
-    const tdId      = tdIdRaw ? 'user_content_' + tdIdRaw : '';
-    if (!window.savedModalRange) return;
+    const textInputElement = document.getElementById('modalTextDisplay');
+    const displayText   = textInputElement.value;
+    const isImage       = textInputElement.getAttribute('data-is-img') === 'true';
+    const hrefUrl       = document.getElementById('modalLinkHref').value.trim();
+    const cellIdRaw     = document.getElementById('modalTdId').value.trim();
+    const fullCellId    = cellIdRaw ? CONSTANTS.USER_CONTENT_PREFIX + cellIdRaw : '';
+    const selection      = window.getSelection();
+    const selectionRange = ModalManager._savedRange;
+	if (!selectionRange) return;
 
-    const sel = window.getSelection();
-    const range = window.savedModalRange;
-
-    if (tdId) {
-        const startNode = range.startContainer;
-        const parentTd  = (startNode.nodeType === 3 ? startNode.parentElement : startNode).closest('td');
-        if (parentTd) parentTd.id = tdId;
+    if (fullCellId) {
+        const parentCell = getResolvedNode(selectionRange.startContainer).closest('td');
+        if (parentCell) parentCell.id = fullCellId;
     }
 
-    if (!href) {
+    if (!hrefUrl) {
         ModalManager.close('linkModal');
         if (typeof window.syncPreviewToEditor === 'function') window.syncPreviewToEditor();
         return;
     }
 
-    const clone = range.cloneContents();
-    const tempDiv = document.createElement('div');
-    tempDiv.appendChild(clone);
-    const originalHTML = tempDiv.innerHTML;
+    const clonedContents = selectionRange.cloneContents();
+    const tempContainer  = document.createElement('div');
+    tempContainer.appendChild(clonedContents);
+    const originalHtml = tempContainer.innerHTML;
 
-    sel.removeAllRanges();
-    sel.addRange(range);
-    
-    range.extractContents(); 
+    selection.removeAllRanges();
+    selection.addRange(selectionRange);
+    selectionRange.extractContents();
 
-    const targetParent = range.commonAncestorContainer.nodeType === 3 
-                         ? range.commonAncestorContainer.parentElement 
-                         : range.commonAncestorContainer;
-
-    if (targetParent) {
-        const junkSpans = targetParent.querySelectorAll('span');
-        junkSpans.forEach(s => {
-            if (!s.textContent.trim() && s.childNodes.length === 0) {
-                s.remove();
-            }
+    const commonAncestorElement = getResolvedNode(selectionRange.commonAncestorContainer);
+    if (commonAncestorElement) {
+        commonAncestorElement.querySelectorAll('span').forEach(spanElement => {
+            if (!spanElement.textContent.trim() && spanElement.childNodes.length === 0) spanElement.remove();
         });
     }
 
-    const a = document.createElement('a');
-    a.href = href;
-    a.target = document.getElementById('modalTargetBlank').checked ? '_blank' : '_self';
-    if (document.getElementById('modalUnderline').checked) a.style.textDecoration = 'none';
+    const anchorElement = document.createElement('a');
+    anchorElement.href   = hrefUrl;
+    anchorElement.target = document.getElementById('modalTargetBlank').checked ? '_blank' : '_self';
+    if (document.getElementById('modalUnderline').checked) anchorElement.style.textDecoration = 'none';
+    anchorElement[isImage ? 'innerHTML' : 'textContent'] = isImage ? originalHtml : displayText;
 
-    if (isImg) {
-        a.innerHTML = originalHTML; 
-    } else {
-        a.textContent = newText;
-    }
-    
-    range.insertNode(a);
-
-    if (a.nextSibling && a.nextSibling.tagName === 'SPAN' && !a.nextSibling.textContent.trim()) {
-        a.nextSibling.remove();
+    selectionRange.insertNode(anchorElement);
+    if (anchorElement.nextSibling?.tagName === 'SPAN' && !anchorElement.nextSibling.textContent.trim()) {
+        anchorElement.nextSibling.remove();
     }
 
-    range.setStartAfter(a);
-    range.collapse(true);
-    sel.removeAllRanges();
-    sel.addRange(range);
+    selectionRange.setStartAfter(anchorElement);
+    selectionRange.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(selectionRange);
 
     ModalManager.close('linkModal');
     if (typeof window.syncPreviewToEditor === 'function') window.syncPreviewToEditor();
 };
 
-/* 캘린더 생성 */
+// ── 캘린더 생성 ───────────────────────────────────────────
 window.generateCalendar = function () {
-    const ymInput = document.getElementById('calBaseYM').value.trim();
-    const [year, month] = ymInput.split('/').map(Number);
-    const showHoliday   = document.getElementById('calShowHoliday').checked;
-    const useId         = document.getElementById('calTargetId').checked;
-    const html = generateBaseCalendar(`${year}/${month}`, { showHoliday, useId, lineHeight: '1' });
+    const yearMonthInput = document.getElementById('calBaseYM')?.value.trim() || '';
+    if (!window.isValidYearMonth?.(yearMonthInput)) {
+        window.showToast('올바른 연/월 형식(YYYY/MM)을 입력하세요.', 'error');
+        return;
+    }
+    const [year, month] = yearMonthInput.split('/').map(Number);
+    const showHoliday   = document.getElementById('calShowHoliday')?.checked ?? true;
+    const useId         = document.getElementById('calTargetId')?.checked ?? false;
+    const calendarHtml  = generateBaseCalendar(`${year}/${month}`, { showHoliday, useId, lineHeight: '1' });
     if (typeof window.insertFormattedHtml === 'function') {
-        window.insertFormattedHtml(html + '<p><br></p>');
+        window.insertFormattedHtml(calendarHtml + '<p><br></p>');
     }
     if (typeof window.closeModal === 'function') window.closeModal('calendarModal');
+};
+
+window.initToolbarCache = function() {
+    window._toolbarBtnCache = {
+        bold:      document.querySelector(".icon-btn[onclick*=\"TextEditor.execStyle('bold')\"]"),
+        italic:    document.querySelector(".icon-btn[onclick*=\"TextEditor.execStyle('italic')\"]"),
+        underline: document.querySelector(".icon-btn[onclick*=\"TextEditor.execStyle('underline')\"]"),
+        strike:    document.querySelector(".icon-btn[onclick*=\"TextEditor.execStyle('strike')\"]"),
+        alignLeft:   document.querySelector(".icon-btn[onclick*=\"TextEditor.align('left')\"]"),
+        alignCenter: document.querySelector(".icon-btn[onclick*=\"TextEditor.align('center')\"]"),
+        alignRight:  document.querySelector(".icon-btn[onclick*=\"TextEditor.align('right')\"]"),
+    };
 };
