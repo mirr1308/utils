@@ -227,7 +227,7 @@ const ModalManager = {
                 <label class="modal-label">날짜칸 색상</label>
                 <div class="input-row" style="display:flex;gap:10px;align-items:center;width:100%;">
                     <input type="text" id="modalTargetAttr" class="modal-input"
-                        placeholder="#333333(평일), #0000FF(토), #FF0000(일)"
+                        placeholder="#333333(평일), blue(토), red(일)"
                         style="flex:7;min-width:0;" data-resetable>
                     <input type="month" id="modalBaseMonth" class="modal-input"
                         style="flex:3;min-width:0;cursor:pointer;text-align:center;"
