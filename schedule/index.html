@@ -42,7 +42,7 @@
 		<div class="divider"></div>
 
 		<div class="tool-group">
-			<select title="글씨체" class="font-select" onchange="changeFontFamily(this.value)" onmousedown="this._preVal=this.value">
+			<select title="글씨체" class="font-select" onchange="TextEditor.changeFontFamily(this.value)" onmousedown="this._preVal=this.value">
 				<option value="">글씨체 (기본)</option>
 				<option value="Arial, sans-serif">Arial</option>
 				<option value="Tahoma, sans-serif">Tahoma</option>
@@ -63,7 +63,7 @@
 				<option value="'Malgun Gothic', '맑은 고딕', sans-serif">맑은 고딕</option>
 				<option value="'Nanum Gothic', '나눔 고딕', sans-serif">나눔 고딕</option>
 			</select>
-			<select title="글자 크기" class="font-select" onchange="changeFontSize(this.value)" style="width: 70px;">
+			<select title="글자 크기" class="font-select" onchange="TextEditor.changeFontSize(this.value)" style="width: 70px;">
 				<option value="">크기</option>
 				<option value="8px">8px</option>
 				<option value="9px">9px</option>
@@ -83,16 +83,16 @@
 				<option value="40px">40px</option>
 				<option value="48px">48px</option>
 			</select>
-			<button class="icon-btn" title="굵게" onclick="execStyle('bold')">
+			<button class="icon-btn" title="굵게" onclick="TextEditor.execStyle('bold')">
 				<span class="material-symbols-outlined">format_bold</span>
 			</button>
-			<button class="icon-btn" title="기울임" onclick="execStyle('italic')">
+			<button class="icon-btn" title="기울임" onclick="TextEditor.execStyle('italic')">
 				<span class="material-symbols-outlined">format_italic</span>
 			</button>
-			<button class="icon-btn" title="밑줄" onclick="execStyle('underline')">
+			<button class="icon-btn" title="밑줄" onclick="TextEditor.execStyle('underline')">
 				<span class="material-symbols-outlined">format_underlined</span>
 			</button>
-			<button class="icon-btn" title="취소선" onclick="execStyle('strike')">
+			<button class="icon-btn" title="취소선" onclick="TextEditor.execStyle('strike')">
 				<span class="material-symbols-outlined">strikethrough_s</span>
 			</button>
 			<button class="icon-btn" title="글자색" onclick="openColor('text', this, event)">
@@ -107,13 +107,13 @@
 		<div class="divider"></div>
 
 		<div class="tool-group">
-			<button class="icon-btn" title="왼쪽 정렬" onclick="align('left')">
+			<button class="icon-btn" title="왼쪽 정렬" onclick="TextEditor.align('left')">
 				<span class="material-symbols-outlined">format_align_left</span>
 			</button>
-			<button class="icon-btn" title="중앙 정렬" onclick="align('center')">
+			<button class="icon-btn" title="중앙 정렬" onclick="TextEditor.align('center')">
 				<span class="material-symbols-outlined">format_align_center</span>
 			</button>
-			<button class="icon-btn" title="오른쪽 정렬" onclick="align('right')">
+			<button class="icon-btn" title="오른쪽 정렬" onclick="TextEditor.align('right')">
 				<span class="material-symbols-outlined">format_align_right</span>
 			</button>
 		</div>
@@ -145,8 +145,39 @@
 
 		<div class="right-box">
 			<div class="pane-header">
-			<span>Live Preview</span>
-			<button id="themeToggleBtn" class="theme-toggle-btn">Light</button>
+				<span class="preview-header">Live Preview</span>
+				<div class="header-controls">
+					<div class="zoom-segment-control" id="zoomController">
+						<button class="zoom-btn" title="축소">
+							<span class="material-symbols-outlined">remove</span>
+						</button>
+						<button class="zoom-reset-btn" id="resetZoomBtn" title="초기화">
+							<span id="zoomLevel" class="zoom-indicator-text">100%</span>
+						</button>
+						<button class="zoom-btn" title="확대">
+							<span class="material-symbols-outlined">add</span>
+						</button>
+					</div>
+					<label class="theme-switch">
+						<input type="checkbox" id="themeToggle">
+						<span class="slider">
+							<span class="material-symbols-outlined icon-moon">dark_mode</span>
+							<span class="material-symbols-outlined icon-sun">light_mode</span>
+						</span>
+					</label>
+					<div class="view-segment-control">
+						<input type="radio" name="viewMode" id="pcView" checked>
+						<label for="pcView" class="segment-item" title="PC 뷰">
+							<span class="material-symbols-outlined">desktop_windows</span>
+							<span class="segment-text">PC</span>
+						</label>					
+						<input type="radio" name="viewMode" id="mobileView">
+						<label for="mobileView" class="segment-item" title="모바일 뷰">
+							<span class="material-symbols-outlined">smartphone</span>
+							<span class="segment-text">Mob</span>
+						</label>
+					</div>
+				</div>
 			</div>
 			
 			<div id="previewArea" class="preview-content">
