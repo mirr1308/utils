@@ -1,14 +1,15 @@
 /**
- * modal-factory.js
- * 역할: 공통 모달 레이아웃 생성 및 동적 주입
+ * modal-factory.js 
  */
+
 const ModalManager = {
     currentDate: new Date(),
-    createBase(id, title, icon = 'settings') {
-        const overlay = document.createElement('div');
-        overlay.id = id;
-        overlay.className = 'modal-overlay';
-        overlay.innerHTML = `
+	_savedRange: null,
+    createBase(modalId, title, icon = 'settings') {
+        const overlayElement = document.createElement('div');
+        overlayElement.id        = modalId;
+        overlayElement.className = 'modal-overlay';
+        overlayElement.innerHTML = `
             <div class="modal-content">
                 <div class="modal-header">
                     <h3><span class="material-symbols-outlined">${icon}</span> ${title}</h3>
@@ -25,98 +26,111 @@ const ModalManager = {
                     </div>
                 </div>
             </div>`;
-        overlay.querySelector('.btn-cancel').onclick = () => this.close(id);
-        return overlay;
+        overlayElement.querySelector('.btn-cancel').onclick = () => this.close(modalId);
+        return overlayElement;
     },
-
-    close(id) {
-        const modal = document.getElementById(id);
-        if (!modal) return;
-        modal.querySelectorAll('[data-resetable]').forEach(el => {
-            if (el.type === 'checkbox') {
-                const def = el.dataset.defaultChecked;
-                el.checked = def !== undefined ? (def === 'true') : el.defaultChecked;
+    close(modalId) {
+        const modalElement = document.getElementById(modalId);
+        if (!modalElement) return;
+        modalElement.querySelectorAll('[data-resetable]').forEach(inputElement => {
+            if (inputElement.type === 'checkbox') {
+                const defaultChecked = inputElement.dataset.defaultChecked;
+                inputElement.checked = defaultChecked !== undefined ? (defaultChecked === 'true') : inputElement.defaultChecked;
             } else {
-                el.value = el.dataset.resetValue ?? '';
+                inputElement.value = inputElement.dataset.resetValue ?? '';
             }
         });
-        modal.style.display = 'none';
+        modalElement.style.display = 'none';
         if (typeof window.updatePreview === 'function') window.updatePreview();
-        window.savedModalRange = null;
+        this._savedRange = null;
+    },
+
+    _mount(modalElement) {
+        document.getElementById('modalContainer').appendChild(modalElement);
+        modalElement.style.display = 'flex';
     },
 
     openAnalysisModal() {
-		const modalId = 'analysisModal';
-        let modal = document.getElementById(modalId);	
-		if (modal) {
-            modal.style.display = 'flex';
-            const input = document.getElementById('analysisInput');
-            const savedCode = AppStore.get('analysis_source_save');
-            if (input) input.value = savedCode || ""; 
+        const modalId = 'analysisModal';
+        let modalElement = document.getElementById(modalId);
+        if (modalElement) {
+            modalElement.style.display = 'flex';
+            this._refreshData(modalElement, 'analysis_source_save', 'analysisInput');
             return;
         }
-        modal = this.createBase(modalId, '데이터 분석/적용', 'table_chart');
-        modal.querySelector('.modal-body').innerHTML = `
+
+        modalElement = this.createBase(modalId, '데이터 분석/적용', 'table_chart');
+        modalElement.querySelector('.modal-body').innerHTML = `
             <div class="modal-section">
                 <label class="modal-label">분석할 Table 소스코드 (Sample 추출)</label>
                 <textarea id="analysisInput" class="modal-input" placeholder="여기에 소스코드를 붙여넣으세요..."></textarea>
                 <p class="helper-text">* 붙여넣은 데이터를 분석하여 자동으로 삽입합니다.</p>
             </div>`;
-        const input = modal.querySelector('#analysisInput');
 
-        modal.querySelector('.btn-confirm').onclick = () => {
-            if (typeof processAnalysis === 'function') processAnalysis();
+        modalElement.querySelector('.btn-confirm').onclick = () => {
+            if (typeof processAnalysis === 'function') {
+                processAnalysis(); 
+                this.close(modalId); 
+            }
         };
-		document.getElementById('modalContainer').appendChild(modal);
-        modal.style.display = 'flex';
-		
-        const savedCode = AppStore.get('analysis_source_save');
-        if (input && savedCode) input.value = savedCode;
+        this._mount(modalElement);
+        this._refreshData(modalElement, 'analysis_source_save', 'analysisInput');
     },
-
+    _refreshData(modalElement, storeKey, inputElementId) {
+        const inputElement = modalElement.querySelector(`#${inputElementId}`);
+        const savedValue   = AppStore.get(storeKey);
+        if (inputElement && savedValue) inputElement.value = savedValue;
+    },
     openRuleModal() {
-        let modal = document.getElementById('ruleModal');
-        if (modal) {
-            modal.style.display = 'flex';
+        let modalElement = document.getElementById('ruleModal');
+        if (modalElement) {
+            modalElement.style.display = 'flex';
             if (typeof window.renderRules === 'function') window.renderRules();
             return;
         }
-        modal = this.createBase('ruleModal', '커스텀 툴바 설정', 'playlist_add');
-        modal.querySelector('.modal-body').innerHTML = `<div id="ruleGroupsContainer"></div>`;
-        const addBtn = document.createElement('button');
-        addBtn.className = 'btn-secondary';
-        addBtn.innerText = '+ 새 그룹 추가';
-        addBtn.onclick = () => addGroup();
-        modal.querySelector('.left-btns').appendChild(addBtn);
-        modal.querySelector('.btn-confirm').onclick = () => {
-            if (typeof applyAndSaveRules === 'function') applyAndSaveRules();
+
+        modalElement = this.createBase('ruleModal', '커스텀 툴바 설정', 'playlist_add');
+        modalElement.querySelector('.modal-body').innerHTML = `<div id="ruleGroupsContainer"></div>`;
+
+        const addGroupButton = document.createElement('button');
+        addGroupButton.className = 'btn-secondary';
+        addGroupButton.innerText = '+ 새 그룹 추가';
+        addGroupButton.onclick   = () => addGroup();
+        modalElement.querySelector('.left-btns').appendChild(addGroupButton);
+
+        modalElement.querySelector('.btn-confirm').onclick = () => {
+            if (typeof applyAndSaveRules === 'function') {
+                applyAndSaveRules();
+                this.close('ruleModal'); 
+            }
         };
-        document.getElementById('modalContainer').appendChild(modal);
-        modal.style.display = 'flex';
+        this._mount(modalElement);
         if (typeof window.renderRules === 'function') window.renderRules();
     },
 
     openCalendarModal() {
-        let modal = document.getElementById('calendarModal');
-        if (modal) { modal.style.display = 'flex'; return; }
+        let modalElement = document.getElementById('calendarModal');
+        if (modalElement) { modalElement.style.display = 'flex'; return; }
 
-        modal = this.createBase('calendarModal', '캘린더 생성/변환', 'calendar_month');
-        const initYM = `${this.currentDate.getFullYear()}/${String(this.currentDate.getMonth() + 1).padStart(2, '0')}`;
-        const nextDate = new Date(this.currentDate.getFullYear(), this.currentDate.getMonth() + 1, 1);
-        const nextYM = `${nextDate.getFullYear()}/${String(nextDate.getMonth() + 1).padStart(2, '0')}`;
+        modalElement = this.createBase('calendarModal', '캘린더 생성/변환', 'calendar_month');
 
-        modal.querySelector('.modal-body').innerHTML = `
+        const formatYearMonth = (dateObject) => `${dateObject.getFullYear()}/${String(dateObject.getMonth() + 1).padStart(2, '0')}`;
+        const currentYearMonth = formatYearMonth(this.currentDate);
+        const nextMonthDate    = new Date(this.currentDate.getFullYear(), this.currentDate.getMonth() + 1, 1);
+        const nextYearMonth    = formatYearMonth(nextMonthDate);
+
+        modalElement.querySelector('.modal-body').innerHTML = `
             <div class="modal-section">
                 <label class="modal-label">기본형 생성</label>
                 <div class="tool-group" style="gap:10px;margin-bottom:10px;">
                     <input type="text" id="calBaseYM" class="modal-input input-date-ym"
-                        value="${initYM}" data-resetable data-reset-value="${initYM}">
+                        value="${currentYearMonth}" data-resetable data-reset-value="${currentYearMonth}">
                     <button type="button" id="btnGenBase" class="btn-confirm">생성</button>
                 </div>
                 <div class="checkbox-group">
                     <label class="checkbox-label"><input type="checkbox" id="calShowHoliday" checked data-resetable> 휴일 표시</label>
                     <label class="checkbox-label"><input type="checkbox" id="calTargetId" data-resetable> Id 링크 생성</label>
-                    <span style="color:#1a73e8;font-size:11px;">*#user_content_(날짜)</span>
+                    <span style="color:#1a73e8;font-size:11px;">*#${CONSTANTS.USER_CONTENT_PREFIX}(날짜)</span>
                 </div>
             </div>
             <hr>
@@ -126,55 +140,69 @@ const ModalManager = {
                     placeholder="여기에 소스코드를 붙여넣으세요..." style="height:80px;resize:none;"></textarea>
             </div>`;
 
-        const mainBtns = modal.querySelector('.main-btns');
-        mainBtns.style.cssText = 'display:flex;align-items:center;width:100%;';
-        mainBtns.innerHTML = `
+        const mainButtonsContainer = modalElement.querySelector('.main-btns');
+        mainButtonsContainer.style.cssText = 'display:flex;align-items:center;width:100%;';
+        mainButtonsContainer.innerHTML = `
             <div class="tool-group" style="gap:5px;">
                 <input type="text" id="advFromYM" class="modal-input input-date-ym"
-                    value="${initYM}" data-resetable data-reset-value="${initYM}">
+                    value="${currentYearMonth}" data-resetable data-reset-value="${currentYearMonth}">
                 <span style="color:#ccc">→</span>
                 <input type="text" id="advToYM" class="modal-input input-date-ym"
-                    value="${nextYM}" data-resetable data-reset-value="${nextYM}">
+                    value="${nextYearMonth}" data-resetable data-reset-value="${nextYearMonth}">
             </div>
             <button type="button" id="btnSave" class="btn-confirm">변환</button>`;
 
-        modal.querySelector('#btnGenBase').addEventListener('click', () => {
-            const ym = modal.querySelector('#calBaseYM').value;
-            if (!isValidYearMonth(ym)) { window.showToast('01월부터 12월 사이로 입력해주세요.'); return; }
-            const html = generateBaseCalendar(ym, {
-                showHoliday: modal.querySelector('#calShowHoliday').checked,
-                useId:       modal.querySelector('#calTargetId').checked,
+        modalElement.querySelector('#btnGenBase').addEventListener('click', () => {
+            const yearMonth = modalElement.querySelector('#calBaseYM').value;
+            if (!window.isValidYearMonth?.(yearMonth)) {
+                window.showToast('01월부터 12월 사이로 입력해 주세요.');
+                return;
+            }
+            const calendarHtml = generateBaseCalendar(yearMonth, {
+                showHoliday: modalElement.querySelector('#calShowHoliday').checked,
+                useId:       modalElement.querySelector('#calTargetId').checked,
             });
-            if (typeof editor !== 'undefined') { insertFormattedHtml(html); modal.style.display = 'none'; }
-        });
-
-        modal.querySelector('#btnSave').addEventListener('click', () => {
-            const src  = modal.querySelector('#advSourceHtml').value;
-            const from = modal.querySelector('#advFromYM').value;
-            const to   = modal.querySelector('#advToYM').value;
-            if (!src.trim()) { window.showToast('변환할 소스코드를 입력해주세요.'); return; }
-            if (!isValidYearMonth(from) || !isValidYearMonth(to)) { window.showToast('1월부터 12월 사이로 입력해주세요.'); return; }
-            try {
-                insertFormattedHtml(transformAdvancedCalendar(src, from, to));
-                modal.style.display = 'none';
-            } catch (e) {
-                window.showToast('변환 중 오류가 발생했습니다. 소스코드를 확인해주세요.');
+            if (typeof window.insertFormattedHtml === 'function') {
+                window.insertFormattedHtml(calendarHtml);
+                this.close('calendarModal');
             }
         });
 
-        document.body.appendChild(modal);
-        modal.style.display = 'flex';
+        modalElement.querySelector('#btnSave').addEventListener('click', () => {
+            const sourceHtml    = modalElement.querySelector('#advSourceHtml').value;
+            const fromYearMonth = modalElement.querySelector('#advFromYM').value;
+            const toYearMonth   = modalElement.querySelector('#advToYM').value;
+            if (!sourceHtml.trim()) { window.showToast('변환할 소스코드를 입력해주세요.'); return; }
+            if (!window.isValidYearMonth?.(fromYearMonth) || !window.isValidYearMonth?.(toYearMonth)) {
+                window.showToast('1월부터 12월 사이로 입력해 주세요.');
+                return;
+            }
+            try {
+                if (typeof window.insertFormattedHtml === 'function') {
+                    window.insertFormattedHtml(transformAdvancedCalendar(sourceHtml, fromYearMonth, toYearMonth));
+                }
+                this.close('calendarModal');
+            } catch (_) {
+                window.showToast('변환 중 오류가 발생했습니다. 소스코드를 확인해 주세요.');
+            }
+        });
+
+        this._mount(modalElement);
     },
 
     openExtendRowModal() {
-        let modal = document.getElementById('extendRowModal');
-        if (modal) { modal.style.display = 'flex'; return; }
+        let modalElement = document.getElementById('extendRowModal');
+        if (modalElement) {
+            modalElement.style.display = 'flex';
+            this._refreshData(modalElement, 'extend_row_day_colors', 'modalTargetAttr'); 
+            return;
+        }
 
-        modal = this.createBase('extendRowModal', '줄 확장', 'add_row_below');
-        const today = new Date();
-        const currentYM = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+        modalElement = this.createBase('extendRowModal', '줄 확장', 'add_row_below');
+        const todayDate    = new Date();
+        const currentYearMonth = `${todayDate.getFullYear()}-${String(todayDate.getMonth() + 1).padStart(2, '0')}`;
 
-        modal.querySelector('.modal-body').innerHTML = `
+        modalElement.querySelector('.modal-body').innerHTML = `
             <div class="modal-section">
                 <label class="modal-label">기간 설정</label>
                 <div class="tool-group" style="display:flex;align-items:center;gap:5px;">
@@ -189,11 +217,11 @@ const ModalManager = {
             <div class="modal-section">
                 <label class="modal-label">날짜 Id 자동 생성</label>
                 <div class="id-input-wrapper">
-                    <span class="id-prefix">user_content_</span>
+                    <span class="id-prefix">${CONSTANTS.USER_CONTENT_PREFIX}</span>
                     <input type="text" id="modalDateId" class="id-inner-input"
                         placeholder="(입력)날짜 형태로 저장됩니다. 예)d → d1, day → day1 등." data-resetable>
                 </div>
-                <p class="helper-text">* 이미 샘플 코드에 Id 선택자가 있으면 사용 할 필요 없음</p>
+                <p class="helper-text">* 이미 샘플 코드에 Id 선택자가 있으면 사용할 필요 없음</p>
             </div>
             <div class="modal-section">
                 <label class="modal-label">날짜칸 색상</label>
@@ -203,44 +231,51 @@ const ModalManager = {
                         style="flex:7;min-width:0;" data-resetable>
                     <input type="month" id="modalBaseMonth" class="modal-input"
                         style="flex:3;min-width:0;cursor:pointer;text-align:center;"
-                        value="${currentYM}" data-resetable data-reset-value="${currentYM}">
+                        value="${currentYearMonth}" data-resetable data-reset-value="${currentYearMonth}">
                 </div>
                 <p class="helper-text">* #헥스코드로만 입력해주세요(rgb 안 됨) 쉼표 구분 필수.</p>
                 <p class="helper-text">* 1개만 입력하면 색 일괄 통일, 2개 입력 시 일요일만 색 구분</p>
             </div>`;
 
-        modal.querySelector('.btn-confirm').onclick = () => {
-            const from = parseInt(document.getElementById('modalExtendFrom').value, 10);
-            const to   = parseInt(document.getElementById('modalExtendTo').value, 10);
-            if (from > to) { window.showToast('종료일은 시작일보다 커야합니다.'); return; }
+        modalElement.querySelector('.btn-confirm').onclick = () => {
+            const fromDay = parseInt(document.getElementById('modalExtendFrom').value, 10);
+            const toDay   = parseInt(document.getElementById('modalExtendTo').value, 10);
+            if (fromDay > toDay) { window.showToast('종료일은 시작일보다 나중이어야 합니다.'); return; }
+
+            const colorInputValue = (document.getElementById('modalTargetAttr')?.value || '').trim();
+            if (colorInputValue) AppStore.set('extend_row_day_colors', colorInputValue);
+            else AppStore.remove('extend_row_day_colors');
+
             if (typeof window.executeExtendRow === 'function') {
                 window.executeExtendRow();
                 ModalManager.close('extendRowModal');
             }
         };
-        document.getElementById('modalContainer').appendChild(modal);
-        modal.style.display = 'flex';
+
+        this._mount(modalElement);
+        this._refreshData(modalElement, 'extend_row_day_colors', 'modalTargetAttr');
     },
 
     openLinkModal() {
-        let modal = document.getElementById('linkModal');
-        if (modal) {
-            modal.style.display = 'flex';
-            const targetBlank = document.getElementById('modalTargetBlank');
-            const underline   = document.getElementById('modalUnderline');
-            if (targetBlank) targetBlank.checked = true;
-            if (underline)   underline.checked   = true;
+        let modalElement = document.getElementById('linkModal');
+        if (modalElement) {
+            modalElement.style.display = 'flex';
+            const targetBlankCheckbox = document.getElementById('modalTargetBlank');
+            const underlineCheckbox   = document.getElementById('modalUnderline');
+            if (targetBlankCheckbox) targetBlankCheckbox.checked = true;
+            if (underlineCheckbox)   underlineCheckbox.checked   = true;
             return;
         }
-        modal = this.createBase('linkModal', '링크 삽입/변경', 'link');
-        modal.querySelector('.modal-body').innerHTML = `
+
+        modalElement = this.createBase('linkModal', '링크 삽입/변경', 'link');
+        modalElement.querySelector('.modal-body').innerHTML = `
             <div class="modal-section">
-                <label class="modal-label">보이는 글자 (또는 이미지 주소)</label>
+                <label class="modal-label">표시할 텍스트(또는 이미지 주소)</label>
                 <input type="text" id="modalTextDisplay" class="modal-input"
-                    placeholder="표시 될 텍스트(입력도 가능)" data-resetable>
-				<div id="linkImgPreview">
-					<img id="modalPreviewImg" src="">
-				</div>
+                    placeholder="표시될 텍스트(입력 가능)" data-resetable>
+                <div id="linkImgPreview">
+                    <img id="modalPreviewImg" src="">
+                </div>
             </div>
             <div class="modal-section">
                 <label class="modal-label">URL</label>
@@ -261,32 +296,35 @@ const ModalManager = {
             <div class="modal-section">
                 <label class="modal-label">Id (td 요소에 적용)</label>
                 <div class="id-input-wrapper">
-                    <span class="id-prefix">user_content_</span>
+                    <span class="id-prefix">${CONSTANTS.USER_CONTENT_PREFIX}</span>
                     <input type="text" id="modalTdId" class="id-inner-input"
                         placeholder="Id값을 입력하세요" data-resetable>
                 </div>
                 <p class="helper-text">* td 칸 안에 있을 경우 해당 칸의 Id로 저장됩니다.</p>
             </div>`;
-        modal.querySelector('.btn-confirm').onclick = () => {
+
+        modalElement.querySelector('.btn-confirm').onclick = () => {
             if (typeof window.applyLinkChanges === 'function') window.applyLinkChanges();
         };
-        document.getElementById('modalContainer').appendChild(modal);
-        modal.style.display = 'flex';
+        this._mount(modalElement);
     },
 };
 
-window.openModal = function (id) {
-    const map = {
+window.openModal = function (modalId) {
+    const modalOpeners = {
         analysisModal:  () => ModalManager.openAnalysisModal(),
         ruleModal:      () => ModalManager.openRuleModal(),
         calendarModal:  () => ModalManager.openCalendarModal(),
         extendRowModal: () => ModalManager.openExtendRowModal(),
         linkModal:      () => {
             ModalManager.openLinkModal();
-            if (typeof window.prepareLinkData === 'function') window.prepareLinkData();
+            if (typeof window.prepareLinkData === 'function') {
+                ModalManager._savedRange = window.prepareLinkData(); 
+            }
         },
     };
-    const opener = map[id];
+    const opener = modalOpeners[modalId];
     if (opener) opener();
 };
-window.closeModal = (id) => ModalManager.close(id);
+
+window.closeModal = (modalId) => ModalManager.close(modalId);
