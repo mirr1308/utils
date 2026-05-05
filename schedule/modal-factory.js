@@ -5,6 +5,14 @@
 const ModalManager = {
     currentDate: new Date(),
 	_savedRange: null,
+    _formatYM(date, sep = '/') {
+        return `${date.getFullYear()}${sep}${String(date.getMonth() + 1).padStart(2, '0')}`;
+    },
+	RULE_ITEM_CONFIG: [
+        { width: '25%', field: 'name', type: 'input',    placeholder: '표시 이름' },
+        { width: '65%', field: 'html', type: 'textarea', placeholder: 'HTML 코드를 입력하세요' },
+        { width: '10%', field: 'del',  type: 'button',   label: '×' }
+    ],
     createBase(modalId, title, icon = 'settings') {
         const overlayElement = document.createElement('div');
         overlayElement.id        = modalId;
@@ -49,7 +57,7 @@ const ModalManager = {
         document.getElementById('modalContainer').appendChild(modalElement);
         modalElement.style.display = 'flex';
     },
-
+    // 1 . 분석
     openAnalysisModal() {
         const modalId = 'analysisModal';
         let modalElement = document.getElementById(modalId);
@@ -81,7 +89,50 @@ const ModalManager = {
         const savedValue   = AppStore.get(storeKey);
         if (inputElement && savedValue) inputElement.value = savedValue;
     },
-    openRuleModal() {
+    // 2. 룰 커스텀
+	_createRuleItemRow(item = { name: '', html: '' }) {
+        const row = document.createElement('tr'); 
+        const cells = this.RULE_ITEM_CONFIG.map(config => {
+            let content = '';
+            if (config.type === 'input') {
+                content = `<input type="text" class="modal-input" value="${item.name || ''}" placeholder="${config.placeholder}">`;
+            } else if (config.type === 'textarea') {
+                content = `<textarea class="modal-input code-area" placeholder="${config.placeholder}">${item.html || ''}</textarea>`;
+            } else if (config.type === 'button') {
+                content = `<button class="btn-del-item" onclick="this.closest('tr').remove()">${config.label}</button>`;
+            }
+            return `<td style="width:${config.width}">${content}</td>`;
+        });
+        row.innerHTML = cells.join('');
+        return row;
+    },
+	addGroup() {
+        const container = document.getElementById('ruleGroupsContainer');
+        if (!container) return;
+        
+        const newGroupCard = document.createElement('div');
+        newGroupCard.className = 'rule-group-card';
+        newGroupCard.innerHTML = `
+            <div class="group-header">
+                <input type="text" class="group-name-input" placeholder="그룹 이름 (예: 카테고리 1)">
+                <button class="btn-del-group" onclick="this.closest('.rule-group-card').remove()">그룹 삭제</button>
+            </div>
+            <table class="rule-item-table">
+                <tbody class="item-list"></tbody>
+            </table>
+            <button class="btn-add-item-dashed" onclick="ModalManager.addItem(this)">+ 새 항목 추가</button>
+        `;
+        const itemListBody = newGroupCard.querySelector('.item-list');
+        itemListBody.appendChild(this._createRuleItemRow());
+        container.appendChild(newGroupCard);
+        return { card: newGroupCard, itemListBody: itemListBody };
+    },
+	addItem(button) {
+        const itemListBody = button.closest('.rule-group-card').querySelector('.item-list');
+        const newRow = this._createRuleItemRow(); 
+        itemListBody.appendChild(newRow);
+    },
+	openRuleModal() {
         let modalElement = document.getElementById('ruleModal');
         if (modalElement) {
             modalElement.style.display = 'flex';
@@ -95,7 +146,7 @@ const ModalManager = {
         const addGroupButton = document.createElement('button');
         addGroupButton.className = 'btn-secondary';
         addGroupButton.innerText = '+ 새 그룹 추가';
-        addGroupButton.onclick   = () => addGroup();
+        addGroupButton.onclick   = () => ModalManager.addGroup();
         modalElement.querySelector('.left-btns').appendChild(addGroupButton);
 
         modalElement.querySelector('.btn-confirm').onclick = () => {
@@ -107,17 +158,65 @@ const ModalManager = {
         this._mount(modalElement);
         if (typeof window.renderRules === 'function') window.renderRules();
     },
+	applyAndSaveRules() {
+        const container = document.getElementById('ruleGroupsContainer');
+        const groupCards = container.querySelectorAll('.rule-group-card');
+        const allGroups = [];
 
+        groupCards.forEach(card => {
+            const groupName = card.querySelector('.group-name-input').value;
+            const groupItems = [];
+            card.querySelectorAll('.item-list tr').forEach(row => {
+                const inputFields = row.querySelectorAll('input, textarea');
+                if (inputFields[0].value.trim() || inputFields[1].value.trim()) {
+                    groupItems.push({ name: inputFields[0].value, html: inputFields[1].value });
+                }
+            });
+            if (groupItems.length > 0 || groupName.trim()) allGroups.push({ groupName, items: groupItems });
+        });
+
+        if (allGroups.length === 0) {
+            if (confirm('입력된 규칙이 없습니다. 기존 설정으로 되돌리시겠습니까?')) {
+                this.renderRules();
+                this.close('ruleModal');
+            }
+            return;
+        }
+        AppStore.set('custom_toolbar_rules', allGroups);
+        window.showToast('설정이 저장되었습니다.');
+        window.updatePreview?.(true);
+        this.close('ruleModal');
+    },
+	renderRules() {
+        const container = document.getElementById('ruleGroupsContainer');
+        if (!container) return;
+        const savedGroups = AppStore.get('custom_toolbar_rules');
+        container.innerHTML = '';
+
+        if (!savedGroups || savedGroups.length === 0) { 
+            this.addGroup(); 
+            return; 
+        }
+        savedGroups.forEach(groupData => {
+            const { card, itemListBody } = this.addGroup();
+            card.querySelector('.group-name-input').value = groupData.groupName;
+            itemListBody.innerHTML = '';
+            const items = groupData.items.length > 0 ? groupData.items : [{ name: '', html: '' }];      
+            items.forEach(item => {
+                itemListBody.appendChild(this._createRuleItemRow(item));
+            });
+        });
+    },	
+    // 3. 캘린더
     openCalendarModal() {
         let modalElement = document.getElementById('calendarModal');
         if (modalElement) { modalElement.style.display = 'flex'; return; }
 
         modalElement = this.createBase('calendarModal', '캘린더 생성/변환', 'calendar_month');
 
-        const formatYearMonth = (dateObject) => `${dateObject.getFullYear()}/${String(dateObject.getMonth() + 1).padStart(2, '0')}`;
-        const currentYearMonth = formatYearMonth(this.currentDate);
+        const currentYearMonth = this._formatYM(this.currentDate);
         const nextMonthDate    = new Date(this.currentDate.getFullYear(), this.currentDate.getMonth() + 1, 1);
-        const nextYearMonth    = formatYearMonth(nextMonthDate);
+        const nextYearMonth    = this._formatYM(nextMonthDate);
 
         modalElement.querySelector('.modal-body').innerHTML = `
             <div class="modal-section">
@@ -189,7 +288,7 @@ const ModalManager = {
 
         this._mount(modalElement);
     },
-
+    // 4. 줄 확장
     openExtendRowModal() {
         let modalElement = document.getElementById('extendRowModal');
         if (modalElement) {
@@ -199,8 +298,8 @@ const ModalManager = {
         }
 
         modalElement = this.createBase('extendRowModal', '줄 확장', 'add_row_below');
-        const todayDate    = new Date();
-        const currentYearMonth = `${todayDate.getFullYear()}-${String(todayDate.getMonth() + 1).padStart(2, '0')}`;
+        const todayDate        = new Date();
+        const currentYearMonth = this._formatYM(todayDate, '-');
 
         modalElement.querySelector('.modal-body').innerHTML = `
             <div class="modal-section">
@@ -227,7 +326,7 @@ const ModalManager = {
                 <label class="modal-label">날짜칸 색상</label>
                 <div class="input-row" style="display:flex;gap:10px;align-items:center;width:100%;">
                     <input type="text" id="modalTargetAttr" class="modal-input"
-                        placeholder="#333333(평일), blue(토), red(일)"
+                        placeholder="#333333(평일), #0000FF(토), #FF0000(일)"
                         style="flex:7;min-width:0;" data-resetable>
                     <input type="month" id="modalBaseMonth" class="modal-input"
                         style="flex:3;min-width:0;cursor:pointer;text-align:center;"
@@ -255,7 +354,7 @@ const ModalManager = {
         this._mount(modalElement);
         this._refreshData(modalElement, 'extend_row_day_colors', 'modalTargetAttr');
     },
-
+    // 5. 링크
     openLinkModal() {
         let modalElement = document.getElementById('linkModal');
         if (modalElement) {
@@ -326,5 +425,8 @@ window.openModal = function (modalId) {
     const opener = modalOpeners[modalId];
     if (opener) opener();
 };
-
 window.closeModal = (modalId) => ModalManager.close(modalId);
+window.addGroup = () => ModalManager.addGroup();
+window.addItem = (btn) => ModalManager.addItem(btn);
+window.applyAndSaveRules = () => ModalManager.applyAndSaveRules();
+window.renderRules = () => ModalManager.renderRules();
