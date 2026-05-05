@@ -83,16 +83,16 @@
 				<option value="40px">40px</option>
 				<option value="48px">48px</option>
 			</select>
-			<button class="icon-btn" title="굵게" onclick="TextEditor.execStyle('bold')">
+			<button class="icon-btn" title="굵게" data-tool="bold" onclick="TextEditor.execStyle('bold')">
 				<span class="material-symbols-outlined">format_bold</span>
 			</button>
-			<button class="icon-btn" title="기울임" onclick="TextEditor.execStyle('italic')">
+			<button class="icon-btn" title="기울임" data-tool="italic" onclick="TextEditor.execStyle('italic')">
 				<span class="material-symbols-outlined">format_italic</span>
 			</button>
-			<button class="icon-btn" title="밑줄" onclick="TextEditor.execStyle('underline')">
+			<button class="icon-btn" title="밑줄" data-tool="underline" onclick="TextEditor.execStyle('underline')">
 				<span class="material-symbols-outlined">format_underlined</span>
 			</button>
-			<button class="icon-btn" title="취소선" onclick="TextEditor.execStyle('strike')">
+			<button class="icon-btn" title="취소선" data-tool="strike" onclick="TextEditor.execStyle('strike')">
 				<span class="material-symbols-outlined">strikethrough_s</span>
 			</button>
 			<button class="icon-btn" title="글자색" onclick="openColor('text', this, event)">
@@ -107,13 +107,13 @@
 		<div class="divider"></div>
 
 		<div class="tool-group">
-			<button class="icon-btn" title="왼쪽 정렬" onclick="TextEditor.align('left')">
+			<button class="icon-btn" title="왼쪽 정렬" data-tool="alignLeft" onclick="TextEditor.align('left')">
 				<span class="material-symbols-outlined">format_align_left</span>
 			</button>
-			<button class="icon-btn" title="중앙 정렬" onclick="TextEditor.align('center')">
+			<button class="icon-btn" title="중앙 정렬" data-tool="alignCenter" onclick="TextEditor.align('center')">
 				<span class="material-symbols-outlined">format_align_center</span>
 			</button>
-			<button class="icon-btn" title="오른쪽 정렬" onclick="TextEditor.align('right')">
+			<button class="icon-btn" title="오른쪽 정렬" data-tool="alignRight" onclick="TextEditor.align('right')">
 				<span class="material-symbols-outlined">format_align_right</span>
 			</button>
 		</div>
@@ -180,8 +180,11 @@
 				</div>
 			</div>
 			
-			<div id="previewArea" class="preview-content">
+			<div id="previewScrollBody">
+				<div id="previewWrapper">
+					<div id="previewArea" class="preview-content"></div>
 				</div>
+			</div>
 		</div>
 	</main>
 	<div id="modalContainer"></div>
