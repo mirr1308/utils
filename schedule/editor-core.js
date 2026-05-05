@@ -2,8 +2,7 @@
  * editor-core.js
  */
 
-window.editor  = null;
-window.preview = null;
+// 1. 정의
 
 const CONSTANTS = {
     TOOLBAR_HEIGHT:       50,
@@ -13,8 +12,6 @@ const CONSTANTS = {
     PREVIEW_SYNC_DELAY:   80,
     GUTTER_DELAY:         50,
     USER_CONTENT_PREFIX:  'user_content_',
-    MOBILE_STYLE_ID:      'mobile-view-override',
-
     NON_LOCKABLE_LABELS: new Set(['설정 불러오기', '설정 내보내기', '코드 복사', '도움말']),
 
     SELECTORS: {
@@ -24,29 +21,25 @@ const CONSTANTS = {
         WRAPPER:      '#previewWrapper',
         THEME_TOGGLE: '#themeToggle',
     },
-    MOBILE_TABLE_CSS: [
-        '.main-container.is-mobile-mode #previewArea { padding: 10px 1px; }',
-        '.main-container.is-mobile-mode #previewArea table { width: 100% !important; min-width: 0 !important; table-layout: fixed !important; margin: 0 !important; border-collapse: collapse; border-spacing: 0; }',
-        '.main-container.is-mobile-mode #previewArea th, .main-container.is-mobile-mode #previewArea td { padding: 0.5em 0.5em !important; }',
-        '.main-container.is-mobile-mode #previewArea :is(th, td, span, p) { font-size: 0.6rem !important; white-space: normal !important; word-break: break-all !important; line-height: 1.5; }'
-    ].join('\n'),
-	STRIP_MOBILE_PROPS: [
-        'width', 'white-space', 'word-break', 'font-size', 
+
+    STRIP_MOBILE_PROPS: [
+        'width', 'white-space', 'word-break', 'font-size',
         'padding', 'line-height', 'min-width', 'table-layout', 'margin'
     ],
 };
 window.CONSTANTS = CONSTANTS;
 
 const BEAUTIFY_OPTIONS = {
-    indent_size:          4,
-    indent_char:          ' ',
-    indent_inner_html:    true,
-    wrap_line_length:     0,
-    preserve_newlines:    true,
+    indent_size:           4,
+    indent_char:           ' ',
+    indent_inner_html:     true,
+    wrap_line_length:      0,
+    preserve_newlines:     true,
     max_preserve_newlines: 1,
-    unformatted: ['span', 'a', 'strong', 'em', 'u', 's', 'b', 'i', 'br'],
+    unformatted: ['span', 'a', 'strong', 'em', 'u', 's', 'b', 'i', 'br', 'th'],
 };
 
+// 2. 헬퍼
 
 function safeBeautify(html) {
     return typeof html_beautify !== 'undefined'
@@ -84,12 +77,12 @@ function _createGutterMarker(className) {
 }
 
 function _highlightEditorLineForCell(clickedTd) {
-    const allTds       = Array.from(window.preview.querySelectorAll('td'));
-    const cellIndex    = allTds.indexOf(clickedTd);
+    const allTds    = Array.from(EditorState.get('preview').querySelectorAll('td'));
+    const cellIndex = allTds.indexOf(clickedTd);
     if (cellIndex === -1) return;
 
-    const code      = window.editor.getValue();
-    const tdRegex   = /<td\b/gi;
+    const code    = EditorState.get('editor').getValue();
+    const tdRegex = /<td\b/gi;
     let match, count = 0, targetLine = -1;
     while ((match = tdRegex.exec(code)) !== null) {
         if (count++ === cellIndex) {
@@ -99,13 +92,27 @@ function _highlightEditorLineForCell(clickedTd) {
     }
     if (targetLine === -1) return;
 
-    window.editor.clearGutter('markers');
-    window.editor.setGutterMarker(targetLine, 'markers', _createGutterMarker('working-marker working-marker--pos'));
-    window.editor.scrollIntoView({ line: targetLine, ch: 0 }, 200);
-    const lineHandle = window.editor.addLineClass(targetLine, 'background', 'active-line-highlight');
-    setTimeout(() => window.editor.removeLineClass(lineHandle, 'background', 'active-line-highlight'), 1000);
+    EditorState.get('editor').clearGutter('markers');
+    EditorState.get('editor').setGutterMarker(targetLine, 'markers', _createGutterMarker('working-marker working-marker--pos'));
+    EditorState.get('editor').scrollIntoView({ line: targetLine, ch: 0 }, 200);
+    const lineHandle = EditorState.get('editor').addLineClass(targetLine, 'background', 'active-line-highlight');
+    setTimeout(() => EditorState.get('editor').removeLineClass(lineHandle, 'background', 'active-line-highlight'), 1000);
 }
 
+function _isCellEmpty(cell) {
+    const html = cell.innerHTML.replace(/\s/g, '');
+    const text = cell.textContent.replace(/\s/g, '');
+    return html === '&nbsp;' || text === '\u00A0' || html === '';
+}
+
+function _triggerDownload(uri, filename) {
+    const link = document.createElement('a');
+    link.setAttribute('href', uri);
+    link.setAttribute('download', filename);
+    link.click();
+}
+
+// 3. 데이터 관리
 
 const EditorState = {
     _data: {
@@ -121,6 +128,7 @@ const EditorState = {
         headerLockedLines:    [],
         editor:               null,
         preview:              null,
+        dirtyCell:            null,
     },
 
     get(key) {
@@ -145,21 +153,19 @@ const EditorState = {
     },
 
     patchPreview(newHtml) {
-        const previewEl = window.preview;
+        const previewEl = this.get('preview');
         if (!previewEl) return;
         if (newHtml.includes('<table')) {
-            if (typeof DomManager !== 'undefined' && DomManager.validate) {
-                const check = DomManager.validate(newHtml);
-                if (!check.ok) {
-                    console.warn('[patchPreview] 테이블 구조 오류로 패치 중단:', check.reason);
-                    return;
-                }
+            const check = DomManager.validate(newHtml);
+            if (!check.ok) {
+                console.warn('[patchPreview] 테이블 구조 오류로 패치 중단:', check.reason);
+                return;
             }
         }
         DomPatchManager.patch(previewEl, newHtml);
-        if (newHtml.includes('<table') && typeof MobileViewManager !== 'undefined' && MobileViewManager._isActive) {
+        if (newHtml.includes('<table') && MobileViewManager._isActive) {
             MobileViewManager._applyCellWidths(previewEl);
-            if (typeof ZoomController !== 'undefined') ZoomController.syncAlignment();
+            ZoomController.syncAlignment();
         }
     },
 };
@@ -293,48 +299,55 @@ const DomManager = {
         return { ok: true };
     },
 
-    clean(element) {
-		if (!element) return;
-		element.removeAttribute('contenteditable');
-		element.style.removeProperty('cursor');
-		const mvm = window.MobileViewManager;
-		const originalStyleStr = mvm?._originalStyles?.get(element);
-		if (originalStyleStr !== undefined) {
-			if (element.style.getPropertyPriority('width') === 'important') {
-				const backup = mvm._originalStyles.get(element);
-				if (backup) {
-					const temp = document.createElement('div');
-					temp.setAttribute('style', backup);
-					element.style.width = temp.style.width; 
-				}
-			}
-			const stripProps = window.CONSTANTS?.STRIP_MOBILE_PROPS || [];
-			stripProps.forEach(prop => {
-				if (element.style.getPropertyPriority(prop) === 'important') {
-					element.style.removeProperty(prop);
-				}
-			});
-		}
-		if (element.tagName === 'TD' || element.tagName === 'TH') {
-			const html = element.innerHTML.replace(/\s/g, '');
-			const text = element.textContent.replace(/\s/g, '');
-			if (html === '&nbsp;' || text === '\u00A0' || html === '') element.innerHTML = '';
-		}
-		if (element.getAttribute('style') === '' || element.style.length === 0) {
-			element.removeAttribute('style');
-		}
-	},
+    clean(element, { stripMobile = false } = {}) {
+        if (!element) return;
+        element.removeAttribute('contenteditable');
+        element.style.removeProperty('cursor');
+        if (stripMobile) {
+            const mvm = window.MobileViewManager;
+            if (mvm?._originalStyles?.has(element)) {
+                const backup = mvm._originalStyles.get(element);
+                if (backup && element.style.getPropertyPriority('width') === 'important') {
+                    const temp = document.createElement('div');
+                    temp.setAttribute('style', backup);
+                    element.style.width = temp.style.width;
+                }
+                CONSTANTS.STRIP_MOBILE_PROPS.forEach(prop => {
+                    if (element.style.getPropertyPriority(prop) === 'important') {
+                        element.style.removeProperty(prop);
+                    }
+                });
+            }
+        }
+        if (element.tagName === 'TD' || element.tagName === 'TH') {
+            element.querySelectorAll('div').forEach(div => {
+                const p = document.createElement('p');
+                p.innerHTML = div.innerHTML;
+                const s = div.getAttribute('style');
+                if (s) p.setAttribute('style', s);
+                div.replaceWith(p);
+            });
+            element.querySelectorAll('br + br').forEach(br => br.remove());
+        }
 
+        if ((element.tagName === 'TD' || element.tagName === 'TH') && _isCellEmpty(element)) {
+            element.innerHTML = '';
+        }
+        if (element.getAttribute('style') === '' || element.style.length === 0) {
+            element.removeAttribute('style');
+        }
+    },
     clone(element) { return element ? element.cloneNode(true) : null; },
 };
 window.DomManager = DomManager;
 
+// 4. 조작 구현
 
 function syncAttributes(oldEl, newEl) {
     if (!oldEl || !newEl) return;
-    Array.from(newEl.attributes).forEach(attr => {
+    for (const attr of newEl.attributes) {
         if (oldEl.getAttribute(attr.name) !== attr.value) oldEl.setAttribute(attr.name, attr.value);
-    });
+    }
     Array.from(oldEl.attributes).forEach(attr => {
         if (!newEl.hasAttribute(attr.name)) oldEl.removeAttribute(attr.name);
     });
@@ -363,23 +376,24 @@ function _patchTextNodes(oldNode, newNode) {
         if (oldChild.nodeType === 3) {
             if (oldChild.nodeValue !== newChild.nodeValue) oldChild.nodeValue = newChild.nodeValue;
         } else if (oldChild.nodeType === 1) {
-            for (const attr of newChild.attributes) {
-                if (oldChild.getAttribute(attr.name) !== attr.value) oldChild.setAttribute(attr.name, attr.value);
-            }
-            Array.from(oldChild.attributes).forEach(attr => {
-                if (!newChild.hasAttribute(attr.name)) oldChild.removeAttribute(attr.name);
-            });
+            syncAttributes(oldChild, newChild);
             _patchTextNodes(oldChild, newChild);
         }
     });
 }
 
 const DomPatchManager = {
+    _cloneAndClean(sectionNode) {
+        const cloned = sectionNode.cloneNode(true);
+        cloned.querySelectorAll('td, th').forEach(cell => DomManager.clean(cell));
+        return cloned;
+    },
+
     patch(oldParent, newHtml) {
         if (!oldParent) return;
-        const newBody    = DomManager.parse(newHtml);
-        const oldTable   = oldParent.querySelector('table');
-        const newTable   = newBody?.querySelector('table');
+        const newBody  = DomManager.parse(newHtml);
+        const oldTable = oldParent.querySelector('table');
+        const newTable = newBody?.querySelector('table');
         if (oldTable && newTable) {
             this._patchTable(oldTable, newTable);
             return;
@@ -396,9 +410,7 @@ const DomPatchManager = {
         if (oldTbody && newTbody) {
             this._patchRows(oldTbody, newTbody);
         } else if (newTbody) {
-            const cloned = newTbody.cloneNode(true);
-            cloned.querySelectorAll('td, th').forEach(cell => DomManager.clean(cell));
-            oldTable.appendChild(cloned);
+            oldTable.appendChild(this._cloneAndClean(newTbody));
         } else if (oldTbody) {
             oldTbody.remove();
         }
@@ -407,13 +419,9 @@ const DomPatchManager = {
     _patchSection(table, oldSec, newSec) {
         if (newSec) {
             if (!oldSec) {
-                const cloned = newSec.cloneNode(true);
-                cloned.querySelectorAll('td, th').forEach(cell => DomManager.clean(cell));
-                table.insertBefore(cloned, table.firstChild);
+                table.insertBefore(this._cloneAndClean(newSec), table.firstChild);
             } else if (!oldSec.isEqualNode(newSec)) {
-                const cloned = newSec.cloneNode(true);
-                cloned.querySelectorAll('td, th').forEach(cell => DomManager.clean(cell));
-                table.replaceChild(cloned, oldSec);
+                table.replaceChild(this._cloneAndClean(newSec), oldSec);
             }
         } else if (oldSec) {
             oldSec.remove();
@@ -429,9 +437,7 @@ const DomPatchManager = {
             if (i >= newRows.length) {
                 oldTbody.removeChild(oldRows[i]);
             } else if (i >= oldRows.length) {
-                const cloned = newRows[i].cloneNode(true);
-                cloned.querySelectorAll('td, th').forEach(cell => DomManager.clean(cell));
-                oldTbody.appendChild(cloned);
+                oldTbody.appendChild(this._cloneAndClean(newRows[i]));
             } else if (!oldRows[i].isEqualNode(newRows[i])) {
                 this._patchCells(oldRows[i], newRows[i], oldTbody);
             }
@@ -444,9 +450,7 @@ const DomPatchManager = {
         const newCells = Array.from(newRow.cells);
 
         if (oldCells.length !== newCells.length) {
-            const cloned = newRow.cloneNode(true);
-            cloned.querySelectorAll('td, th').forEach(cell => DomManager.clean(cell));
-            parentTbody.replaceChild(cloned, oldRow);
+            parentTbody.replaceChild(this._cloneAndClean(newRow), oldRow);
             return;
         }
 
@@ -467,12 +471,13 @@ const DomPatchManager = {
     },
 };
 
+// 5. UI/UX
 
 const ThemeManager = {
     init() {
-        const toggle     = document.querySelector(CONSTANTS.SELECTORS.THEME_TOGGLE);
+        const toggle      = document.querySelector(CONSTANTS.SELECTORS.THEME_TOGGLE);
         const previewArea = document.querySelector(CONSTANTS.SELECTORS.PREVIEW);
-        const rightBox   = document.querySelector(CONSTANTS.SELECTORS.RIGHT);
+        const rightBox    = document.querySelector(CONSTANTS.SELECTORS.RIGHT);
         if (!toggle || !previewArea) return;
         toggle.addEventListener('change', () => {
             const isDark = toggle.checked;
@@ -483,49 +488,130 @@ const ThemeManager = {
 };
 
 const ZoomController = {
-    _currentZoom: 1,
+    _currentZoom:  1,
+    _naturalWidth: null,
+
+    _getEls() {
+        return {
+            scrollBody: document.getElementById('previewScrollBody'),
+            preview:    EditorState.get('preview'),
+            wrapper:    EditorState.get('previewWrapper'),
+        };
+    },
 
     init() {
         const zoomContainer = document.getElementById('zoomController');
         if (!zoomContainer) return;
 
-        const zoomLevelEl   = document.getElementById('zoomLevel');
-        const resetBtn      = document.getElementById('resetZoomBtn');
+        const zoomLevelEl        = document.getElementById('zoomLevel');
+        const resetBtn           = document.getElementById('resetZoomBtn');
         const [decBtn, , incBtn] = zoomContainer.querySelectorAll('button');
 
         const ZOOM_STEP = 0.1;
         const ZOOM_MIN  = 0.3;
-        const ZOOM_MAX  = 3.0;
+        const ZOOM_MAX  = 5.0;
 
-        const applyAndUpdate = (val) => {
+        const applyAndUpdate = (val, clientX, clientY) => {
             const clamped = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, parseFloat(val.toFixed(2))));
-            this.apply(clamped);
+            this.apply(clamped, clientX, clientY);
             if (zoomLevelEl) zoomLevelEl.textContent = Math.round(clamped * 100) + '%';
         };
 
-        decBtn?.addEventListener('click', () => applyAndUpdate(this._currentZoom - ZOOM_STEP));
-        incBtn?.addEventListener('click', () => applyAndUpdate(this._currentZoom + ZOOM_STEP));
+        decBtn?.addEventListener('click',  () => applyAndUpdate(this._currentZoom - ZOOM_STEP));
+        incBtn?.addEventListener('click',  () => applyAndUpdate(this._currentZoom + ZOOM_STEP));
         resetBtn?.addEventListener('click', () => applyAndUpdate(1));
+
+        const { scrollBody } = this._getEls();
+        const wheelTarget = scrollBody || document.getElementById('previewArea') || document;
+        wheelTarget.addEventListener('wheel', (e) => {
+            if (!e.ctrlKey) return;
+            e.preventDefault();
+            const direction = e.deltaY < 0 ? 1 : -1;
+            let nextZoom = Math.round((this._currentZoom + (direction * ZOOM_STEP)) * 10) / 10;
+            nextZoom = Math.max(ZOOM_MIN, Math.min(nextZoom, ZOOM_MAX));
+            applyAndUpdate(nextZoom, e.clientX, e.clientY);
+        }, { passive: false });
 
         this.apply(this._currentZoom);
         window.addEventListener('editor:preview-layout-change', () => this.syncAlignment());
     },
 
-    apply(zoomLevel) {
+    _clearTransformStyles(preview) {
+        ['transform', 'transform-origin', 'margin-top', 'margin-bottom', 'margin-left', 'margin-right']
+            .forEach(p => preview.style.removeProperty(p));
+    },
+
+    apply(zoomLevel, clientX, clientY) {
+        const { scrollBody, preview, wrapper } = this._getEls();
+        if (!preview) { this._currentZoom = zoomLevel; return; }
+
+        if (zoomLevel > 1) {
+            if (this._naturalWidth === null) {
+                this._naturalWidth = scrollBody ? scrollBody.clientWidth : preview.offsetWidth;
+                preview.style.width = this._naturalWidth + 'px';
+            }
+
+            let ratioX = 0, ratioY = 0;
+            if (clientX != null && scrollBody) {
+                const rect  = scrollBody.getBoundingClientRect();
+                const mouseX = (clientX - rect.left) + scrollBody.scrollLeft;
+                const mouseY = (clientY - rect.top)  + scrollBody.scrollTop;
+                ratioX = mouseX / (this._naturalWidth * this._currentZoom);
+                ratioY = mouseY / (preview.offsetHeight * this._currentZoom);
+            }
+
+            this._clearTransformStyles(preview);
+            preview.style.zoom = zoomLevel;
+
+            if (clientX != null && scrollBody) {
+                const rect = scrollBody.getBoundingClientRect();
+                scrollBody.scrollLeft = ratioX * (this._naturalWidth * zoomLevel) - (clientX - rect.left);
+                scrollBody.scrollTop  = ratioY * (preview.offsetHeight * zoomLevel) - (clientY - rect.top);
+            }
+            if (wrapper) wrapper.style.justifyContent = 'flex-start';
+
+        } else if (zoomLevel < 1) {
+            if (!EditorState.get('isMobileViewActive') && scrollBody) {
+                preview.style.width    = scrollBody.clientWidth + 'px';
+                preview.style.minWidth = scrollBody.clientWidth + 'px';
+            }
+            this._clearTransformStyles(preview);
+            preview.style.removeProperty('margin-bottom');
+            preview.style.zoom = zoomLevel;
+
+        } else {
+            this._naturalWidth = null;
+            if (!EditorState.get('isMobileViewActive')) {
+                ['width', 'min-width', 'max-width'].forEach(p => preview.style.removeProperty(p));
+            }
+            this._clearTransformStyles(preview);
+            preview.style.removeProperty('zoom');
+            if (scrollBody) {
+                scrollBody.scrollLeft = 0;
+                scrollBody.scrollTop  = 0;
+            }
+            if (wrapper && !EditorState.get('isMobileViewActive')) {
+                wrapper.style.justifyContent = 'center';
+            }
+        }
+
         this._currentZoom = zoomLevel;
-        const preview = EditorState.get('preview');
-        if (preview) preview.style.zoom = zoomLevel;
+        this._updateVisibility();
         this.syncAlignment();
     },
 
-    syncAlignment() {
-        const preview        = EditorState.get('preview');
-        const previewWrapper = EditorState.get('previewWrapper');
-        if (!preview || !previewWrapper) return;
+    _updateVisibility() {
+        const zoomContainer = document.getElementById('zoomController');
+        if (!zoomContainer) return;
+        zoomContainer.classList.toggle('is-active', Math.abs(this._currentZoom - 1) >= 0.005);
+    },
 
-        const isMobile       = EditorState.get('isMobileViewActive');
-        const needsCenter    = isMobile || (preview.offsetWidth * this._currentZoom < previewWrapper.clientWidth);
-        previewWrapper.style.justifyContent = needsCenter ? 'center' : 'flex-start';
+    syncAlignment() {
+        const preview = EditorState.get('preview');
+        const wrapper = EditorState.get('previewWrapper');
+        if (!preview || !wrapper) return;
+        wrapper.style.justifyContent =
+            (this._currentZoom < 1 || EditorState.get('isMobileViewActive')) ? 'center' : 'flex-start';
     },
 
     getCurrentZoom() { return this._currentZoom; },
@@ -564,7 +650,6 @@ const MobileViewManager = {
         const { main, right, preview, wrapper } = this._getEls();
         main?.classList.add('is-mobile-mode');
         if (wrapper) wrapper.style.justifyContent = 'center';
-        this._injectMobileCss();
         this._applyCellWidths(preview);
         if (right) this._resizeObserver.observe(right);
         this.refreshWidth();
@@ -577,12 +662,11 @@ const MobileViewManager = {
         const { main, right, preview } = this._getEls();
         main?.classList.remove('is-mobile-mode');
         if (right) this._resizeObserver.unobserve(right);
-        this._removeMobileCss();
+        this._resizeObserver.disconnect();
+        this._resizeObserver = new ResizeObserver(() => this.refreshWidth());
         this._restoreOriginalStyles(preview);
         if (preview) {
-            preview.style.removeProperty('width');
-            preview.style.removeProperty('min-width');
-            preview.style.removeProperty('max-width');
+            ['width', 'min-width', 'max-width'].forEach(p => preview.style.removeProperty(p));
         }
         EditorState.set('isMobileViewActive', false);
         this._dispatchUpdate();
@@ -592,66 +676,54 @@ const MobileViewManager = {
         if (!this._isActive) return;
         const { right, preview } = this._getEls();
         if (!right || !preview) return;
-
         const mobileWidth = Math.min(CONSTANTS.MOBILE_LOGICAL_WIDTH, right.clientWidth - 20) + 'px';
         ['width', 'minWidth', 'maxWidth'].forEach(prop => { preview.style[prop] = mobileWidth; });
         requestAnimationFrame(() => this._dispatchUpdate());
     },
 
-    _injectMobileCss() {
-        let styleEl = document.getElementById(CONSTANTS.MOBILE_STYLE_ID);
-        if (!styleEl) {
-            styleEl = document.createElement('style');
-            styleEl.id = CONSTANTS.MOBILE_STYLE_ID;
-            document.head.appendChild(styleEl);
-        }
-        styleEl.textContent = CONSTANTS.MOBILE_TABLE_CSS;
-    },
-
-    _removeMobileCss() {
-        document.getElementById(CONSTANTS.MOBILE_STYLE_ID)?.remove();
-    },
-
     _applyCellWidths(container) {
         const table = container?.querySelector('table');
         if (!table) return;
-		const targets = table.querySelectorAll('th, td');
+        const targets = table.querySelectorAll('th, td');
         [table, ...targets].forEach(el => {
             if (!this._originalStyles.has(el)) {
                 this._originalStyles.set(el, el.getAttribute('style') || '');
             }
         });
         const tableWidth = parseFloat(table.style.width) || parseFloat(table.getAttribute('width')) || 0;
-        table.querySelectorAll('th, td').forEach(cell => {
-            if (!this._originalStyles.has(cell)) this._originalStyles.set(cell, cell.getAttribute('style') || '');
+        targets.forEach(cell => {
             const cellWidth = parseFloat(cell.style.width) || parseFloat(cell.getAttribute('width')) || 0;
             if (tableWidth > 0 && cellWidth > 0) {
-				cell.style.setProperty('width', (cellWidth / tableWidth * 100).toFixed(4) + '%', 'important');
-			}
-            cell.style.setProperty('white-space', 'normal', 'important');
+                cell.style.setProperty('width', (cellWidth / tableWidth * 100).toFixed(4) + '%', 'important');
+            }
         });
     },
-	stripMobileStyles(container) {
-		if (!container) return;
-		const table = container.querySelector('table');
-		if (table) {
-			const targets = table.querySelectorAll('*');
-			[table, ...targets].forEach(el => window.DomManager.clean(el));
-		}
-		['width', 'min-width', 'max-width'].forEach(p => container.style.removeProperty(p));
-	},
+
+    stripMobileStyles(container) {
+        if (!container) return;
+        const table = container.querySelector('table');
+        if (table) {
+            [table, ...table.querySelectorAll('*')].forEach(el => DomManager.clean(el));
+        }
+        ['width', 'min-width', 'max-width'].forEach(p => container.style.removeProperty(p));
+    },
+
     _restoreOriginalStyles(container) {
-        container?.querySelectorAll('th, td').forEach(cell => {
-            if (!this._originalStyles.has(cell)) return;
-            const original = this._originalStyles.get(cell);
-            original ? cell.setAttribute('style', original) : cell.removeAttribute('style');
-            this._originalStyles.delete(cell);
+        if (!container) return;
+        const table = container.querySelector('table');
+        const targets = table ? [table, ...table.querySelectorAll('th, td')] : [];
+        targets.forEach(el => {
+            if (!this._originalStyles.has(el)) return;
+            const original = this._originalStyles.get(el);
+            original ? el.setAttribute('style', original) : el.removeAttribute('style');
+            this._originalStyles.delete(el);
         });
     },
 };
 
+// 6. 동기화&편집
 
-function syncPreviewToEditor() {
+function syncPreviewToEditor({ beautify = true } = {}) {
     if (EditorState.get('isSyncing')) return;
     const preview = EditorState.get('preview');
     const editor  = EditorState.get('editor');
@@ -663,16 +735,14 @@ function syncPreviewToEditor() {
     temp.querySelectorAll('.preview-line-focus').forEach(el => el.classList.remove('preview-line-focus'));
     temp.querySelectorAll('[class=""]').forEach(el => el.removeAttribute('class'));
 
-    if (EditorState.get('isMobileViewActive') && hasTable) {
-		MobileViewManager.stripMobileStyles(temp);
-	}
     if (hasTable) {
+        if (EditorState.get('isMobileViewActive')) MobileViewManager.stripMobileStyles(temp);
         temp.querySelectorAll('td, th, [contenteditable], [style*="cursor"]').forEach(el => DomManager.clean(el));
     }
 
-    const rawHtml  = ColorManager.restoreColors(temp.innerHTML);
-    const html     = safeBeautify(rawHtml);
-    const current  = editor.getValue();
+    const rawHtml = ColorManager.restoreColors(temp.innerHTML);
+    const html    = beautify ? safeBeautify(rawHtml) : rawHtml;
+    const current = editor.getValue();
     if (current === html) return;
 
     withSyncLock(() => {
@@ -714,6 +784,78 @@ function syncPreviewToEditor() {
 }
 window.syncPreviewToEditor = syncPreviewToEditor;
 
+function updateEditorCell(cell, isFullReplace = false) {
+    if (!cell || EditorState.get('isSyncing')) return;
+
+    const allCells  = Array.from(EditorState.get('preview').querySelectorAll('td, th'));
+    const cellIndex = allCells.indexOf(cell);
+    if (cellIndex === -1) return;
+
+    const code  = EditorState.get('editor').getValue();
+    const range = _findNthCellRange(code, cellIndex, cell.tagName.toLowerCase());
+    if (!range) return syncPreviewToEditor({ beautify: true });
+
+    const editor = EditorState.get('editor');
+    const cloned = cell.cloneNode(true);
+    DomManager.clean(cloned);
+    const rawInner = ColorManager.restoreColors(cloned.innerHTML);
+
+    const oldHtml  = code.slice(range.start, range.end);
+    const charToPos = (idx) => {
+        const lines = code.slice(0, idx).split('\n');
+        return { line: lines.length - 1, ch: lines[lines.length - 1].length };
+    };
+
+    withSyncLock(() => {
+        editor.operation(() => {
+            if (isFullReplace) {
+                const openTag  = oldHtml.slice(0, oldHtml.indexOf('>') + 1);
+                const closeTag = oldHtml.slice(oldHtml.lastIndexOf('</'));
+                const leading  = oldHtml.match(/^\s*/)[0];
+                const trailing = oldHtml.match(/\s*$/)[0];
+                const newHtml  = leading + safeBeautify(openTag + rawInner + closeTag).trim() + trailing;
+                if (oldHtml === newHtml) return;
+                editor.replaceRange(newHtml, charToPos(range.start), charToPos(range.end));
+                const startLine = charToPos(range.start).line;
+                const lineCount = newHtml.split('\n').length;
+                for (let i = 0; i < lineCount; i++) editor.indentLine(startLine + i, 'smart');
+            } else {
+                const startOff = oldHtml.indexOf('>') + 1;
+                const endOff   = oldHtml.lastIndexOf('</');
+                editor.replaceRange(rawInner, charToPos(range.start + startOff), charToPos(range.start + endOff));
+            }
+        });
+    });
+}
+
+function _findNthCellRange(code, cellIndex, tagName) {
+    const openRe  = /<(td|th)(\s[^>]*)?>|<\/(td|th)>/gi;
+    let count     = -1;
+    let depth     = 0;
+    let cellStart = -1;
+    let match;
+
+    while ((match = openRe.exec(code)) !== null) {
+        const full    = match[0];
+        const isClose = full.startsWith('</');
+        const tag     = isClose ? match[3] : match[1];
+
+        if (!isClose) {
+            depth++;
+            if (depth === 1) {
+                count++;
+                if (count === cellIndex) cellStart = match.index;
+            }
+        } else {
+            if (depth === 1 && count === cellIndex && cellStart !== -1) {
+                return { start: cellStart, end: match.index + full.length };
+            }
+            depth = Math.max(0, depth - 1);
+        }
+    }
+    return null;
+}
+
 function applyEditableMode(html) {
     const preview = EditorState.get('preview');
     if (!preview) return;
@@ -750,8 +892,8 @@ window.syncToEditor = function (rawHtml, { beautify = true, refreshPreview = tru
     if (refreshPreview) {
         EditorState.patchPreview(finalHtml);
         applyEditableMode(finalHtml);
+        syncPreviewToEditor({ beautify: false });
     }
-    syncPreviewToEditor();
     _requestHeaderLockUpdate();
 };
 
@@ -761,25 +903,22 @@ window.insertFormattedHtml = function (rawHtml) {
     editor.focus();
 };
 
+// 7. I/O&유틸
 
-
-window.exportConfigToJson = function () {
+function exportConfigToJson() {
     const data = {
         version:        '1.0',
         timestamp:      new Date().toISOString(),
         analysisSample: AppStore.get('analysis_source_save') || '',
         customRules:    AppStore.get('custom_toolbar_rules') || [],
     };
-    const uri  = 'data:application/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(data, null, 4));
-    const link = document.createElement('a');
-    link.setAttribute('href', uri);
-    link.setAttribute('download', `editor_backup_${new Date().toISOString().slice(0, 10)}.json`);
-    link.click();
+    const uri = 'data:application/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(data, null, 4));
+    _triggerDownload(uri, `editor_backup_${new Date().toISOString().slice(0, 10)}.json`);
 };
 
 window.downloadFile = function () {
     if (confirm('현재의 샘플코드와 커스텀 툴바 설정을 파일(.json)로 백업하시겠습니까?')) {
-        window.exportConfigToJson();
+        exportConfigToJson();
     }
 };
 
@@ -814,31 +953,29 @@ window.uploadFile = function () {
     fileInput.click();
 };
 
-function copyCode() {
+window.copyCode = function () {
     const editor = EditorState.get('editor');
     const code   = editor.getValue();
     if (!code) { window.showToast('복사할 코드가 없습니다.'); return; }
 
     const headerLockRange = EditorState.get('headerLockRange');
     const useLock         = headerLockRange && !window.isCalendarTable?.();
-    let textToCopy        = code;
+    const textToCopy      = useLock
+        ? code.split('\n').slice(headerLockRange.trStart, headerLockRange.trEnd + 1).join('\n').trim()
+        : code;
 
-    if (useLock) {
-        const { trStart, trEnd } = headerLockRange;
-        textToCopy = code.split('\n').slice(trStart, trEnd + 1).join('\n').trim();
-        if (!textToCopy) { window.showToast('복사할 tr 행이 없습니다.'); return; }
-    }
+    if (useLock && !textToCopy) { window.showToast('복사할 tr 행이 없습니다.'); return; }
 
     navigator.clipboard.writeText(textToCopy)
         .then(() => window.showToast(useLock ? '<tr> 행 코드가 복사되었습니다!' : 'HTML 코드가 복사되었습니다!'))
         .catch(() => window.showToast('복사 중 오류가 발생했습니다.'));
-}
+};
 
 window.showToast = function (message, type = 'info') {
     document.getElementById('editor-toast')?.remove();
-    const toast     = document.createElement('div');
-    toast.id        = 'editor-toast';
-    toast.className = `editor-toast editor-toast--${type}`;
+    const toast       = document.createElement('div');
+    toast.id          = 'editor-toast';
+    toast.className   = `editor-toast editor-toast--${type}`;
     toast.textContent = message;
     document.body.appendChild(toast);
     requestAnimationFrame(() => toast.classList.add('editor-toast--show'));
@@ -852,6 +989,7 @@ window.setButtonActive = function (button, isActive) {
     button?.classList.toggle('active', isActive);
 };
 
+// 8. 메인 실행
 
 window.onload = function () {
     window.isCalendarTable = window.isCalendarTable ?? (() => false);
@@ -868,42 +1006,17 @@ window.onload = function () {
         });
     }
     toggleEditTools(true);
-	
+
     const editor = CodeMirror.fromTextArea(document.getElementById('htmlInput'), {
-        mode:        'htmlmixed',
-        theme:       'neo',
-        lineNumbers: true,
+        mode:         'htmlmixed',
+        theme:        'neo',
+        lineNumbers:  true,
         lineWrapping: true,
-        gutters:     ['CodeMirror-linenumbers', 'markers'],
+        gutters:      ['CodeMirror-linenumbers', 'markers'],
     });
-    window.editor = editor;
-    window.preview = document.getElementById('previewArea');
-
+    const previewEl = document.getElementById('previewArea');
     EditorState.set('editor',  editor);
-    EditorState.set('preview', window.preview);
-
-    const rightBox = window.preview.closest('.right-box');
-    let scrollBody    = document.getElementById('previewScrollBody');
-    let previewWrapper = document.getElementById('previewWrapper');
-
-    if (!scrollBody) {
-        const paneHeader = rightBox.querySelector('.pane-header');
-        scrollBody = Object.assign(document.createElement('div'), {
-            id:       'previewScrollBody',
-            style:    {},
-        });
-        scrollBody.style.cssText = 'flex:1;overflow:auto;position:relative;';
-
-        previewWrapper = Object.assign(document.createElement('div'), { id: 'previewWrapper' });
-        previewWrapper.style.cssText = 'display:flex;justify-content:center;align-items:flex-start;min-height:100%;';
-
-        window.preview.parentNode.removeChild(window.preview);
-        previewWrapper.appendChild(window.preview);
-        scrollBody.appendChild(previewWrapper);
-
-        const insertTarget = paneHeader?.parentNode === rightBox ? paneHeader.nextSibling : null;
-        rightBox.insertBefore(scrollBody, insertTarget);
-    }
+    EditorState.set('preview', previewEl);
 
     EditorState.set('previewWrapper', document.getElementById('previewWrapper'));
     EditorState.set('scrollBody',     document.getElementById('previewScrollBody'));
@@ -935,7 +1048,7 @@ window.onload = function () {
     }
 
     editor.on('change', (cm, change) => {
-        if (document.activeElement && window.preview.contains(document.activeElement)) return;
+        if (document.activeElement && previewEl.contains(document.activeElement)) return;
         if (EditorState.get('isSyncing')) return;
         clearTimeout(_changeTimer);
         const isImmediate = change.origin === 'paste'
@@ -947,16 +1060,79 @@ window.onload = function () {
     });
 
     editor.on('blur', () => {
-        if (window.preview.contains(document.activeElement)) return;
+        if (previewEl.contains(document.activeElement)) return;
         window.syncToEditor(editor.getValue(), { beautify: true, refreshPreview: true });
         _requestHeaderLockUpdate();
     });
 
-    const preview = window.preview;
+    const preview = previewEl;
 
-    preview.addEventListener('input', () => {
+    let _isComposing = false;
+    preview.addEventListener('compositionstart', () => { _isComposing = true;  }, true);
+    preview.addEventListener('compositionend',   () => {
+        _isComposing = false;
+        const cell = document.activeElement?.closest('td, th');
+        if (cell) {
+            EditorState.set('dirtyCell', cell);
+            updateEditorCell(cell, false);
+        } else {
+            window.syncToEditor(preview.innerHTML, { beautify: true, refreshPreview: false });
+        }
+    }, true);
+
+    preview.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter') return;
+        const cell = e.target.closest('td, th');
+        if (!cell) return;
+        e.preventDefault();
+        const sel = window.getSelection();
+        if (!sel?.rangeCount) return;
+        const range = sel.getRangeAt(0);
+        range.deleteContents();
+        const br = document.createElement('br');
+        range.insertNode(br);
+        range.setStartAfter(br);
+        range.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(range);
+        EditorState.set('dirtyCell', cell);
+        updateEditorCell(cell, false);
+    }, true);
+
+    preview.addEventListener('paste', (e) => {
+        const cell = e.target.closest('td, th');
+        if (!cell) return;
+        e.preventDefault();
+        const text = e.clipboardData.getData('text/plain');
+        if (!text) return;
+        const sel = window.getSelection();
+        if (!sel?.rangeCount) return;
+        const range = sel.getRangeAt(0);
+        range.deleteContents();
+        const lines = text.split(/\r?\n/);
+        lines.forEach((line, i) => {
+            if (i > 0) range.insertNode(document.createElement('br'));
+            if (line) range.insertNode(document.createTextNode(line));
+        });
+        range.collapse(false);
+        sel.removeAllRanges();
+        sel.addRange(range);
+        EditorState.set('dirtyCell', cell);
+        updateEditorCell(cell, false);
+    }, true);
+
+    preview.addEventListener('input', (e) => {
+        if (_isComposing) return;
         clearTimeout(EditorState.get('syncTimer'));
-        EditorState.set('syncTimer', setTimeout(syncPreviewToEditor, CONSTANTS.PREVIEW_SYNC_DELAY));
+        EditorState.set('syncTimer', setTimeout(() => {
+            const cell = e.target.closest('td, th');
+            if (cell) {
+                EditorState.set('dirtyCell', cell);
+                updateEditorCell(cell, false); // 실시간 모드
+            } else {
+                window.syncToEditor(preview.innerHTML, { beautify: true, refreshPreview: false });
+            }
+        }, CONSTANTS.PREVIEW_SYNC_DELAY));
     }, true);
 
     preview.addEventListener('focusin', (e) => {
@@ -966,10 +1142,9 @@ window.onload = function () {
             makeEditableOnlyCells(preview);
             cell.focus();
         }
-        const html = cell.innerHTML.trim();
-        const text = cell.textContent.trim();
-        if (html === '&nbsp;' || text === '\u00A0' || html === '') {
-            cell.innerHTML = '';
+        EditorState.set('dirtyCell', cell);
+        if (_isCellEmpty(cell)) {
+            withSyncLock(() => { cell.innerHTML = ''; });
             const range = document.createRange();
             range.selectNodeContents(cell);
             range.collapse(true);
@@ -980,11 +1155,11 @@ window.onload = function () {
     });
 
     preview.addEventListener('click', (e) => {
-        const hasTable = !!preview.querySelector('table');
-        if (hasTable) {
-            const clickedCell = e.target.closest('td, th');
-            const clickedTd   = e.target.closest('td');
+        const hasTable    = !!preview.querySelector('table');
+        const clickedCell = e.target.closest('td, th');
+        const clickedTd   = e.target.closest('td');
 
+        if (hasTable) {
             if (clickedCell && clickedCell.getAttribute('contenteditable') !== 'true') {
                 makeEditableOnlyCells(preview);
                 setTimeout(() => clickedCell.focus(), 0);
@@ -999,7 +1174,7 @@ window.onload = function () {
     });
 
     preview.addEventListener('keyup',   TextEditor.updateToolbarStatus);
-    preview.addEventListener('mouseup', (e) => {
+    preview.addEventListener('mouseup', () => {
         if (document.activeElement?.tagName === 'SELECT') return;
         TextEditor.updateToolbarStatus();
     });
@@ -1025,9 +1200,26 @@ window.onload = function () {
 
     preview.addEventListener('focus', () => toggleEditTools(false), true);
     preview.addEventListener('blur', (e) => {
-        if (preview.contains(e.relatedTarget)) return;
+        const leavingCell  = e.target.closest('td, th');
+        const enteringCell = e.relatedTarget?.closest('td, th');
+
+        if (leavingCell && preview.contains(e.relatedTarget)) {
+            if (leavingCell !== enteringCell) {
+                updateEditorCell(EditorState.get('dirtyCell') || leavingCell, true);
+                EditorState.set('dirtyCell', null);
+            }
+            return;
+        }
+
         if (e.relatedTarget?.closest('.toolbar')) return;
         toggleEditTools(true);
+
+        const dirty = EditorState.get('dirtyCell');
+        if (dirty) {
+            updateEditorCell(dirty, true);
+            EditorState.set('dirtyCell', null);
+        }
+        setTimeout(() => syncPreviewToEditor({ beautify: true }), 50);
     }, true);
 
     document.querySelectorAll('.toolbar .icon-btn').forEach(btn => {
