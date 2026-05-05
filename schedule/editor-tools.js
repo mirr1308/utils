@@ -2,6 +2,8 @@
  * editor-tools.js 
  */
 
+// 1. 상수 및 스타일 정의
+
 const SEMANTIC_TAG_MAP = {
     bold:      'strong',
     italic:    'em',
@@ -33,6 +35,8 @@ const _debounceTimers = {
     font: null,
     size: null,
 };
+
+// 2. 텍스트 포맷
 
 const TextFormatTools = {
     styleKey(styles) {
@@ -87,6 +91,7 @@ const TextEditor = {
         const styleMetadata = styleMap[styleType];
         if (!styleMetadata) return;
 
+        let _earlyReturned = false;
         EditorState.startSync();
         try {
             if (selectionData.type === 'preview') {
@@ -110,12 +115,10 @@ const TextEditor = {
                                 parentCell.style.textAlign = alignValue;
                             }
                             if (parentCell.getAttribute('style') === '') parentCell.removeAttribute('style');
-                            const nextAlign = parentCell.style.textAlign || '';
                             if (typeof this.updateToolbarStatus === 'function') {
                                 this.updateToolbarStatus();
                             }
-                            EditorState.endSync(true);
-                            if (typeof window.syncPreviewToEditor === 'function') window.syncPreviewToEditor();
+                            _earlyReturned = true;
                             return;
                         }
                         _applyToContainer(parentCell, selectionRange, styleMetadata, styleType, value, selection, true);
@@ -147,21 +150,20 @@ const TextEditor = {
             EditorState.endSync(true);
             if (selectionData.type === 'editor') editor.focus();
             if (typeof window.syncPreviewToEditor === 'function') window.syncPreviewToEditor();
-            
-            if (typeof this.updateToolbarStatus === 'function') this.updateToolbarStatus();
-            
-            if (window._headerLockRange && typeof window.applyHeaderLock === 'function') {
+            if (!_earlyReturned && typeof this.updateToolbarStatus === 'function') {
+                this.updateToolbarStatus();
+            }
+            if (EditorState.get('headerLockRange') && typeof window.applyHeaderLock === 'function') {
                 requestAnimationFrame(() => window.applyHeaderLock());
             }
         }
     },
 
     getSelectionData() {
-        const preview   = EditorState.get('preview');
-        const editor    = EditorState.get('editor');
-        const previewArea = document.getElementById('previewArea');
-        const selection   = window.getSelection();
-        if (selection?.anchorNode && previewArea?.contains(selection.anchorNode)) {
+        const preview = EditorState.get('preview');
+        const editor  = EditorState.get('editor');
+        const selection = window.getSelection();
+        if (selection?.anchorNode && preview?.contains(selection.anchorNode)) {
             const range = selection.getRangeAt(0);
             return { type: 'preview', range, text: range.toString() };
         }
@@ -172,13 +174,22 @@ const TextEditor = {
         return null;
     },
 
+    _updateRafId: null,
     updateToolbarStatus() {
+        if (this._updateRafId) cancelAnimationFrame(this._updateRafId);
+        this._updateRafId = requestAnimationFrame(() => {
+            this._updateRafId = null;
+            this._doUpdateToolbarStatus();
+        });
+    },
+    _doUpdateToolbarStatus() {
         const selection = window.getSelection();
         if (!selection || !selection.rangeCount) return;
         const range = selection.getRangeAt(0);
 
         let targetElements = [];
         if (!range.collapsed) {
+            const seen = new Set();
             const treeWalker = document.createTreeWalker(
                 range.commonAncestorContainer,
                 NodeFilter.SHOW_TEXT,
@@ -188,7 +199,10 @@ const TextEditor = {
             let textNode;
             while ((textNode = treeWalker.nextNode())) {
                 const parentElement = textNode.parentElement;
-                if (parentElement && !targetElements.includes(parentElement)) targetElements.push(parentElement);
+                if (parentElement && !seen.has(parentElement)) {
+                    seen.add(parentElement);
+                    targetElements.push(parentElement);
+                }
             }
         }
         if (targetElements.length === 0) {
@@ -232,15 +246,92 @@ const TextEditor = {
     }
 };
 
-function walkNodes(node, callback) {
-    if (!node) return;
-    if (callback(node) === false) return false;
-    let childNode = node.firstChild;
-    while (childNode) {
-        if (walkNodes(childNode, callback) === false) return false;
-        childNode = childNode.nextSibling;
+// 3. 커스텀 툴바 업데이트
+
+function _setCustomToolbarVisible(toolbar, visible) {
+    const mainContainer = document.querySelector('.main-container');
+    toolbar.style.display = visible ? 'flex' : 'none';
+    if (!mainContainer) return;
+    if (visible) {
+        requestAnimationFrame(() => {
+            const toolbarHeight = toolbar.getBoundingClientRect().height;
+            mainContainer.style.marginTop = (CONSTANTS.TOOLBAR_HEIGHT + toolbarHeight) + 'px';
+        });
+    } else {
+        mainContainer.style.marginTop = CONSTANTS.TOOLBAR_HEIGHT + 'px';
     }
 }
+
+window.updatePreview = function (forceShow = false) {
+    const toolbar     = document.getElementById('customToolbar');
+    const savedGroups = AppStore.get('custom_toolbar_rules');
+
+    if (!savedGroups || savedGroups.length === 0) {
+        _setCustomToolbarVisible(toolbar, false);
+        toolbar.innerHTML = '';
+        return;
+    }
+    if (!forceShow && toolbar.style.display !== 'flex') {
+        _setCustomToolbarVisible(toolbar, false);
+        return;
+    }
+    _setCustomToolbarVisible(toolbar, true);
+
+    toolbar.innerHTML = '';
+    savedGroups.forEach(group => {
+        const selectElement = document.createElement('select');
+        selectElement.className = 'custom-rule-select';
+
+        const titleOption = document.createElement('option');
+        titleOption.text  = group.groupName || '그룹 선택';
+        titleOption.value = '';
+        titleOption.disabled = titleOption.selected = true;
+        selectElement.appendChild(titleOption);
+
+        group.items.forEach(item => {
+            if (item.name.trim() || item.html.trim()) {
+                const option = document.createElement('option');
+                option.value = item.html;
+                option.text  = item.name || '내용 없음';
+                selectElement.appendChild(option);
+            }
+        });
+
+        let _selectDebounceTimer = null;
+        selectElement.onchange = function () {
+            if (!this.value) return;
+            const htmlToInsert = this.value;
+            this.selectedIndex = 0;
+            clearTimeout(_selectDebounceTimer);
+            _selectDebounceTimer = setTimeout(() => {
+                const savedRange = EditorState.get('savedRange');
+                EditorState.startSync();
+                if (savedRange) {
+                    const selection = window.getSelection();
+                    selection.removeAllRanges();
+                    selection.addRange(savedRange);
+                    const fragment = savedRange.createContextualFragment(htmlToInsert);
+                    const lastInsertedNode = fragment.lastChild;
+                    savedRange.deleteContents();
+                    savedRange.insertNode(fragment);
+                    if (lastInsertedNode) {
+                        const newRange = document.createRange();
+                        newRange.setStartAfter(lastInsertedNode);
+                        newRange.setEndAfter(lastInsertedNode);
+                        selection.removeAllRanges();
+                        selection.addRange(newRange);
+                        EditorState.set('savedRange', newRange.cloneRange());
+                    }
+                }
+                EditorState.endSync(true);
+                requestAnimationFrame(() => window.syncPreviewToEditor?.());
+            }, 0);
+        };
+        toolbar.appendChild(selectElement);
+    });
+};
+
+// 4. DOM 엔진
 
 function buildCharMap(paragraphElement) {
     const charMap = [];
@@ -476,8 +567,7 @@ function _applyAlign(paragraphElement, alignValue, selection) {
     const currentAlign = paragraphElement.style.textAlign;
     paragraphElement.style.textAlign = (currentAlign === alignValue || alignValue === 'left') ? '' : alignValue;
     if (paragraphElement.getAttribute('style') === '') paragraphElement.removeAttribute('style');
-    const nextAlign = paragraphElement.style.textAlign || 'left';
-	if (typeof TextEditor.updateToolbarStatus === 'function') {
+    if (typeof TextEditor.updateToolbarStatus === 'function') {
         TextEditor.updateToolbarStatus();
     }
     const fullRange = document.createRange();
@@ -486,7 +576,8 @@ function _applyAlign(paragraphElement, alignValue, selection) {
     selection.addRange(fullRange);
 }
 
-// ── 컬러 피커 ─────────────────────────────────────────────
+// 5. 외부 도구 (컬러피커, 링크, 캘린더)
+
 function openColor(colorMode, triggerButton, event) {
     if (event) { event.stopPropagation(); event.preventDefault(); }
     if (window.activePicker) return;
@@ -525,8 +616,6 @@ function openColor(colorMode, triggerButton, event) {
     picker.show();
     window.activePicker = picker;
 }
-
-// ── 하이퍼링크 ────────────────────────────────────────────
 
 window.prepareLinkData = function () {
     const selection = window.getSelection();
@@ -631,7 +720,6 @@ window.applyLinkChanges = function () {
     if (typeof window.syncPreviewToEditor === 'function') window.syncPreviewToEditor();
 };
 
-// ── 캘린더 생성 ───────────────────────────────────────────
 window.generateCalendar = function () {
     const yearMonthInput = document.getElementById('calBaseYM')?.value.trim() || '';
     if (!window.isValidYearMonth?.(yearMonthInput)) {
@@ -648,14 +736,12 @@ window.generateCalendar = function () {
     if (typeof window.closeModal === 'function') window.closeModal('calendarModal');
 };
 
+// 6. 초기화
+
 window.initToolbarCache = function() {
-    window._toolbarBtnCache = {
-        bold:      document.querySelector(".icon-btn[onclick*=\"TextEditor.execStyle('bold')\"]"),
-        italic:    document.querySelector(".icon-btn[onclick*=\"TextEditor.execStyle('italic')\"]"),
-        underline: document.querySelector(".icon-btn[onclick*=\"TextEditor.execStyle('underline')\"]"),
-        strike:    document.querySelector(".icon-btn[onclick*=\"TextEditor.execStyle('strike')\"]"),
-        alignLeft:   document.querySelector(".icon-btn[onclick*=\"TextEditor.align('left')\"]"),
-        alignCenter: document.querySelector(".icon-btn[onclick*=\"TextEditor.align('center')\"]"),
-        alignRight:  document.querySelector(".icon-btn[onclick*=\"TextEditor.align('right')\"]"),
-    };
+    const cache = {};
+    document.querySelectorAll('.toolbar [data-tool]').forEach(btn => {
+        cache[btn.dataset.tool] = btn;
+    });
+    window._toolbarBtnCache = cache;
 };
