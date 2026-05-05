@@ -138,21 +138,18 @@ input[type="number"] {
 
 .left-box, .right-box {
     flex: 1 1 50%;
-	transition: flex 0.4s ease;	
-    height: 100%;  
-    display: flex;  
+    transition: flex 0.4s ease;
+    height: 100%;
+    display: flex;
     flex-direction: column;
-    box-sizing: border-box; 
+    box-sizing: border-box;
     border: 1px solid #ddd;
-	overflow: hidden; 
+    overflow: hidden;
     min-width: 0;
 }
 
 .right-box {
-    overflow: hidden; 
     position: relative;
-    display: flex;
-    flex-direction: column;
 }
 
 .pane-header {
@@ -429,7 +426,7 @@ input:checked + .slider .icon-sun {
 	line-height : 1.5;
 }
 
-.toolbar, .pane-header,.modal-content h3,.modal-footer {
+.toolbar, .pane-header, .modal-content h3 {
     -webkit-user-select: none;  
     -moz-user-select: none;  
     -ms-user-select: none;   
@@ -521,9 +518,6 @@ input:checked + .slider .icon-sun {
     cursor: pointer;                   
 }
 
-#previewArea a:hover {
-    text-opacity: 0.8;
-}
 
 #previewArea a:not([style*="color"]) {
     color: inherit;
@@ -554,25 +548,13 @@ background-color: #555555 !important;
     outline: 2px solid #00A3FF !important; 
 }
 
-@font-face {
-    font-family: 'NanumGothic';
-    src: local('Nanum Gothic'), local('나눔고딕'), local('나눔 고딕');
-}
-
-@font-face {
-    font-family: 'MalgunGothic';
-    src: local('Malgun Gothic'), local('맑은고딕'), local('맑은 고딕');
-}
 .picker_wrapper {
     z-index: 9999 !important;
 }
 
 .picker_wrapper .picker_sl, .picker_wrapper .picker_hue {
     user-select: none;
-    -webkit-user-select: none;
 }
-
-/* [통합 모달 시스템] */
 
 .modal-overlay {
     position: fixed;
